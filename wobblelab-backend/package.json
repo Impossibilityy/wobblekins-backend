@@ -1,0 +1,15 @@
+{
+  "name": "wobblelab-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Wobblelab MVP backend: receives custom-widget requests, stores them in Supabase, uploads reference images to Supabase Storage, and emails a summary via Resend.",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "formidable": "^3.5.2",
+    "resend": "^4.0.1"
+  }
+}
