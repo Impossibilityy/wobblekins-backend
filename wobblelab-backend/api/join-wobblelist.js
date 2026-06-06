@@ -7,10 +7,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-const FROM_EMAIL = 'Wobblekins <requests@wobblekins.com>';
+const FROM_EMAIL = 'The Wobble Lab <requests@wobblekins.com>';
 
 const ALLOWED_ORIGINS = [
-  'https://wobblekins.com',
   'https://www.wobblekins.com',
 ];
 
