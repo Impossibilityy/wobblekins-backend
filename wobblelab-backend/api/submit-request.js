@@ -276,13 +276,91 @@ export default async function handler(req, res) {
           <p style="font-size:12px;color:#999">Submitted ${escapeHtml(inserted.created_at)} · Status: New</p>
         </div>`;
 
-      await resend.emails.send({
-  from: process.env.WOBBLEKINS_FROM_EMAIL,
-  to: email,
-  replyTo: process.env.WOBBLEKINS_RECEIVER_EMAIL,
-  subject: `Your Wobblekin request entered the Wobble Lab! ${requestNumber}`,
-  html: customerHtml,
-});
+      const fromEmail = process.env.WOBBLEKINS_FROM_EMAIL;
+const adminEmail = process.env.WOBBLEKINS_RECEIVER_EMAIL;
+
+const adminSubject = `New Wobblekin Request ${requestNumber} — ${name}`;
+const customerSubject = `Your Wobblekin request entered the Wobble Lab! ${requestNumber}`;
+
+const customerHtml = `
+  <div style="font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;color:#111;line-height:1.6;background:#ffffff;">
+    <div style="padding:24px;border-radius:18px;border:1px solid #eee;background:linear-gradient(135deg,#fff,#f8f8ff);">
+      
+      <h1 style="margin:0 0 10px;font-size:26px;line-height:1.2;">
+        Your Wobblekin request entered the Wobble Lab!
+      </h1>
+
+      <p style="font-size:16px;margin:0 0 18px;">
+        Hi ${escapeHtml(name)},
+      </p>
+
+      <p style="font-size:16px;margin:0 0 16px;">
+        Your custom Wobblekin request has officially made it into the lab queue.
+        We received your creature details, and your request ID is:
+      </p>
+
+      <div style="font-size:22px;font-weight:800;letter-spacing:.04em;background:#111;color:#fff;padding:14px 18px;border-radius:14px;margin:18px 0;text-align:center;">
+        ${escapeHtml(requestNumber)}
+      </div>
+
+      ${
+        preferred_wobblekin_name
+          ? `<p style="margin:0 0 8px;"><strong>Preferred Wobblekin name:</strong> ${escapeHtml(preferred_wobblekin_name)}</p>`
+          : ""
+      }
+
+      ${
+        intended_use
+          ? `<p style="margin:0 0 18px;"><strong>Intended use:</strong> ${escapeHtml(intended_use)}</p>`
+          : ""
+      }
+
+      <div style="background:#f6f6f6;border-radius:14px;padding:16px 18px;margin:20px 0;">
+        <h2 style="font-size:18px;margin:0 0 10px;">What happens next?</h2>
+        <p style="margin:0 0 8px;">1. We’ll review your request.</p>
+        <p style="margin:0 0 8px;">2. We’ll check the trait mix, reference images, and overall creature idea.</p>
+        <p style="margin:0;">3. We’ll reach out if we need more details before moving forward.</p>
+      </div>
+
+      <p style="font-size:16px;margin:18px 0;">
+        Our tiny lab crew is checking for the right amount of charm, wobble,
+        and personality. If you need to add anything, just reply to this email
+        and include your request ID:
+        <strong>${escapeHtml(requestNumber)}</strong>.
+      </p>
+
+      <p style="font-size:16px;margin:22px 0 0;">
+        Thanks for sending a new little creature into the Wobble Lab.
+      </p>
+
+      <p style="font-size:16px;font-weight:700;margin:8px 0 0;">
+        The Wobblekins Team
+      </p>
+    </div>
+
+    <p style="font-size:12px;color:#777;text-align:center;margin:18px 0 0;">
+      Wobblekins · Custom creature requests from the Wobble Lab
+    </p>
+  </div>
+`;
+
+const emailResults = await Promise.allSettled([
+  resend.emails.send({
+    from: fromEmail,
+    to: adminEmail,
+    replyTo: email,
+    subject: adminSubject,
+    html,
+  }),
+
+  resend.emails.send({
+    from: fromEmail,
+    to: email,
+    replyTo: adminEmail,
+    subject: customerSubject,
+    html: customerHtml,
+  }),
+]);
       const customerHtml = `
   <div style="font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;color:#111;line-height:1.6;background:#ffffff;">
     <div style="padding:24px;border-radius:18px;border:1px solid #eee;background:linear-gradient(135deg,#fff,#f8f8ff);">
