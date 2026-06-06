@@ -113,12 +113,43 @@ export default async function handler(req, res) {
     if (RESEND_API_KEY) {
       try {
         const resend = new Resend(RESEND_API_KEY);
-        await resend.emails.send({
-          from: FROM_EMAIL,
-          to: email,
-          subject: 'Wobblelist confirmed — your spark signal is live',
-          html: buildConfirmationEmail({ name, interest }),
-        });
+        const adminHtml = `
+  <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111;">
+    <h2>New Wobblelist Subscriber</h2>
+    <p><strong>Name:</strong> ${escapeHtml(name || "(not provided)")}</p>
+    <p><strong>Email:</strong> ${escapeHtml(email)}</p>
+    <p><strong>Interest:</strong> ${escapeHtml(interest || "(not selected)")}</p>
+    <p><strong>Source:</strong> ${escapeHtml(source || "website")}</p>
+  </div>
+`;
+
+const emailResults = await Promise.allSettled([
+  resend.emails.send({
+    from: FROM_EMAIL,
+    to: process.env.WOBBLEKINS_RECEIVER_EMAIL,
+    replyTo: email,
+    subject: `New Wobblelist subscriber — ${email}`,
+    html: adminHtml,
+  }),
+
+  resend.emails.send({
+    from: FROM_EMAIL,
+    to: email,
+    replyTo: process.env.WOBBLEKINS_RECEIVER_EMAIL,
+    subject: 'Wobblelist confirmed — your spark signal is live',
+    html: buildConfirmationEmail({ name, interest }),
+  }),
+]);
+
+emailResults.forEach((result, index) => {
+  const label = index === 0 ? "Admin Wobblelist email" : "Customer Wobblelist email";
+
+  if (result.status === "rejected") {
+    console.error(`${label} failed:`, result.reason);
+  } else {
+    console.log(`${label} sent:`, result.value);
+  }
+});
       } catch (mailErr) {
         console.error('Wobblelist email error:', mailErr);
       }
