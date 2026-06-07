@@ -74,11 +74,15 @@ function getSupabase() {
 // -----------------------------------------------------------------------------
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
+  // Always emit an allow-origin header. If the caller's origin is in the
+  // allowlist, reflect it; otherwise fall back to the primary site origin so
+  // the preflight never comes back with NO header (which is what blocks it).
+  const allowedOrigin = ALLOWED_ORIGINS.includes(origin)
+    ? origin
+    : "https://www.wobblekins.com";
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-admin-key");
   res.setHeader("Access-Control-Max-Age", "86400");
 }
@@ -399,8 +403,17 @@ const POST_ACTIONS = {
 };
 
 module.exports = async function handler(req, res) {
+  // CORS first — before auth, action parsing, or anything that can fail —
+  // so EVERY response path (preflight, 401, 404, 405, 500, success) carries
+  // the allow-origin header.
   setCorsHeaders(req, res);
-  if (req.method === "OPTIONS") { res.status(204).end(); return; }
+
+  // Answer the preflight before checking the admin key. A blocked preflight
+  // is why the key check was never reached.
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   if (!requireAdmin(req, res)) return;
   noCache(res);
 
