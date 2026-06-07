@@ -20,22 +20,22 @@
 // Vercel's automatic body parser OFF (see `module.exports.config` at the bottom)
 // and read the raw stream ourselves.
 // =============================================================================
-
+ 
 const { createClient } = require('@supabase/supabase-js');
 const Stripe = require('stripe');
 const { Resend } = require('resend');
-
+ 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const resend = new Resend(process.env.RESEND_API_KEY);
-
+ 
 const ADMIN_EMAIL = 'genesisforge@wobblekins.com';
-
+ 
 // FROM address MUST be on a domain you've verified in Resend.
 // For your very first test you may use 'Wobble Lab <onboarding@resend.dev>'.
 // Replace with your verified domain sender once DNS is set up in Resend.
 const FROM_EMAIL = 'Wobble Lab <adoptions@wobblekins.com>';
-
+ 
 // ---- read the raw request body (needed for signature verification) ----------
 function readRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -45,12 +45,12 @@ function readRawBody(req) {
     req.on('error', reject);
   });
 }
-
+ 
 const money = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
-
+ 
 async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
-
+ 
   let event;
   try {
     const rawBody = await readRawBody(req);
@@ -60,17 +60,17 @@ async function handler(req, res) {
     console.error('[stripe-webhook] signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-
+ 
   // We only act on completed checkouts. Always return 200 for anything else so
   // Stripe doesn't keep retrying events we don't handle.
   if (event.type !== 'checkout.session.completed') {
     return res.status(200).json({ received: true, ignored: event.type });
   }
-
+ 
   try {
     const session = event.data.object;
     const orderId = session.metadata && session.metadata.order_id;
-
+ 
     // Find the order by id (preferred) or by the Stripe session id (fallback).
     let order = null;
     if (orderId) {
@@ -85,14 +85,14 @@ async function handler(req, res) {
       console.error('[stripe-webhook] no matching order for session', session.id);
       return res.status(200).json({ received: true, note: 'no matching order' });
     }
-
+ 
     // Shipping address (Stripe field name has varied; handle both shapes).
     const shipping =
       session.shipping_details ||
       (session.collected_information && session.collected_information.shipping_details) ||
       null;
     const customer = session.customer_details || {};
-
+ 
     // ---- IDEMPOTENT paid-marking --------------------------------------------
     // Only the FIRST webhook to flip pending->paid "wins". If a duplicate event
     // arrives, the .neq('status','paid') filter returns 0 rows and we skip the
@@ -116,29 +116,29 @@ async function handler(req, res) {
       .eq('id', order.id)
       .neq('status', 'paid')
       .select();
-
+ 
     if (updErr) throw updErr;
-
+ 
     if (!updatedRows || updatedRows.length === 0) {
       // Already processed by an earlier delivery of this event — do nothing.
       console.log('[stripe-webhook] order already paid, skipping:', order.id);
       return res.status(200).json({ received: true, duplicate: true });
     }
     const paidOrder = updatedRows[0];
-
+ 
     // ---- Ensure order items exist (rebuild from metadata if missing) --------
     const { data: existingItems } = await supabase
       .from('wobblekin_order_items')
       .select('*')
       .eq('order_id', paidOrder.id);
-
+ 
     let items = existingItems || [];
     if (items.length === 0 && paidOrder.metadata && Array.isArray(paidOrder.metadata.line_items)) {
       const rebuilt = paidOrder.metadata.line_items.map((oi) => ({ ...oi, order_id: paidOrder.id }));
       const { data: inserted } = await supabase.from('wobblekin_order_items').insert(rebuilt).select();
       items = inserted || rebuilt;
     }
-
+ 
     // ---- Send the emails -----------------------------------------------------
     const toEmail = paidOrder.customer_email;
     if (toEmail) {
@@ -163,7 +163,7 @@ async function handler(req, res) {
     } catch (e) {
       console.error('[stripe-webhook] admin email failed:', e);
     }
-
+ 
     return res.status(200).json({ received: true });
   } catch (err) {
     console.error('[stripe-webhook] handler error:', err);
@@ -172,15 +172,15 @@ async function handler(req, res) {
     return res.status(200).json({ received: true, error: 'handled-with-error' });
   }
 }
-
+ 
 module.exports = handler;
 // Turn OFF Vercel's body parser so we can verify the Stripe signature.
 module.exports.config = { api: { bodyParser: false } };
-
+ 
 // =============================================================================
 // EMAIL TEMPLATES (inline styles only — email clients can't run JS or <style>)
 // =============================================================================
-
+ 
 // Rainbow wordmark built from inline colored <span>s (works in email).
 function rainbowWordmark() {
   const colors = ['#ff3b6b', '#ff8a1f', '#ffd23f', '#42d60c', '#15d0c0', '#3b9dff', '#a85cff', '#ff5fd2'];
@@ -189,7 +189,7 @@ function rainbowWordmark() {
     `<span style="color:${colors[i % colors.length]};font-weight:800;letter-spacing:2px;">${ch}</span>`
   ).join('');
 }
-
+ 
 function itemsRows(items) {
   return items.map((it) => `
     <tr>
@@ -201,7 +201,7 @@ function itemsRows(items) {
       </td>
     </tr>`).join('');
 }
-
+ 
 // ---- CUSTOMER confirmation ---------------------------------------------------
 function customerEmailHtml(order, items) {
   const name = order.customer_name ? escapeHtml(order.customer_name.split(' ')[0]) : 'friend';
@@ -219,7 +219,7 @@ function customerEmailHtml(order, items) {
               Hi ${name}, the Wobble Lab has logged your order. Your Wobblekin discovery is being prepared.
             </p>
           </td></tr>
-
+ 
           <tr><td style="padding:18px 28px 6px;">
             <div style="background:#0d0d12;border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:16px 18px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -237,14 +237,14 @@ function customerEmailHtml(order, items) {
               </table>
             </div>
           </td></tr>
-
+ 
           <tr><td style="padding:16px 28px 4px;">
             <p style="margin:0;color:#b6b6c2;font-size:14px;line-height:1.6;">
               You'll receive updates as your adoption moves through the forge. If a shipping
               address was collected, your Wobblekin will be sent there.
             </p>
           </td></tr>
-
+ 
           <tr><td style="padding:18px 28px 30px;">
             <div style="border-top:1px solid rgba(255,255,255,.10);padding-top:16px;color:#6f6f7c;font-size:12px;line-height:1.6;">
               Order ref: ${escapeHtml(order.id)}<br/>
@@ -256,7 +256,7 @@ function customerEmailHtml(order, items) {
     </table>
   </div>`;
 }
-
+ 
 // ---- ADMIN notification ------------------------------------------------------
 function adminEmailHtml(order, items, session) {
   const addr = order.shipping_address || {};
@@ -270,7 +270,7 @@ function adminEmailHtml(order, items, session) {
           <tr><td style="height:5px;line-height:5px;font-size:5px;background:linear-gradient(90deg,#ff3b6b,#ff8a1f,#ffd23f,#42d60c,#15d0c0,#3b9dff,#a85cff,#ff5fd2);">&nbsp;</td></tr>
           <tr><td style="padding:24px 26px;">
             <h2 style="margin:0 0 14px;color:#f4f4f8;font-size:19px;">New adoption order</h2>
-
+ 
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="color:#cfcfd8;font-size:14px;line-height:1.7;">
               <tr><td style="color:#9a9aa6;width:150px;">Customer</td><td style="color:#f4f4f8;">${escapeHtml(order.customer_name || '—')}</td></tr>
               <tr><td style="color:#9a9aa6;">Email</td><td style="color:#f4f4f8;">${escapeHtml(order.customer_email || '—')}</td></tr>
@@ -282,7 +282,7 @@ function adminEmailHtml(order, items, session) {
               <tr><td style="color:#9a9aa6;">Placed</td><td style="color:#f4f4f8;">${new Date(order.created_at).toISOString()}</td></tr>
               <tr><td style="color:#9a9aa6;vertical-align:top;">Shipping</td><td style="color:#f4f4f8;">${escapeHtml(addrLine || '— (none collected)')}</td></tr>
             </table>
-
+ 
             <h3 style="margin:20px 0 8px;color:#f4f4f8;font-size:15px;">Items</h3>
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               ${items.map(it => `
@@ -293,7 +293,7 @@ function adminEmailHtml(order, items, session) {
                   <td align="right" style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.08);color:#f4f4f8;font-size:14px;">${money(it.total_cents)}</td>
                 </tr>`).join('')}
             </table>
-
+ 
             <div style="margin-top:18px;background:#0d0d12;border:1px dashed rgba(255,255,255,.16);border-radius:12px;padding:14px 16px;color:#9a9aa6;font-size:13px;">
               <strong style="color:#cfcfd8;">Fulfillment notes:</strong><br/>
               ________________________________________________<br/>
@@ -305,7 +305,7 @@ function adminEmailHtml(order, items, session) {
     </table>
   </div>`;
 }
-
+ 
 function escapeHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
