@@ -2,8 +2,12 @@
 // =============================================================================
 // Forge Console — SINGLE consolidated admin route (Vercel Hobby friendly).
 //
-// One Serverless Function handles every admin action via ?action=... so the
-// project stays under Vercel's 12-function Hobby limit.
+// IMPORTANT: This file is ESM (`import` / `export default`) to match the rest
+// of this project. If your project is CommonJS instead (no "type":"module" in
+// package.json, other routes use module.exports), tell me and I'll hand you a
+// CommonJS version — but the symptom you hit (no CORS header even on OPTIONS)
+// is the classic sign the function never loaded, which is what a module-format
+// mismatch causes.
 //
 //   GET  /api/admin?action=summary
 //   GET  /api/admin?action=orders        (optional: status, fulfillment_status, limit, offset)
@@ -14,11 +18,11 @@
 //   POST /api/admin?action=update-request    body: { request_id, status?, admin_notes? }
 //   POST /api/admin?action=update-product    body: { product_id, is_active?, is_featured?, stock_quantity?, price_cents?, admin_notes? }
 //
-// Everything runs SERVER-SIDE ONLY and uses the Supabase service role key.
-// Requires x-admin-key === process.env.ADMIN_SECRET_KEY on every request.
+// Runs SERVER-SIDE ONLY. Uses the Supabase service role key. Requires
+// x-admin-key === process.env.ADMIN_SECRET_KEY on every non-OPTIONS request.
 // =============================================================================
 
-const { createClient } = require("@supabase/supabase-js");
+import { createClient } from "@supabase/supabase-js";
 
 // -----------------------------------------------------------------------------
 // CONFIG — edit ONLY these if your Supabase names differ.
@@ -36,18 +40,48 @@ const ORDER_ITEMS_FK = "order_id";
 // Primary key column on the orders table.
 const ORDERS_PK = "id";
 
-const ALLOWED_ORIGINS = [
-  "https://wobblekins.com",
-  "https://www.wobblekins.com",
-  "https://wobblekins-backend.vercel.app",
-];
-
 const ALLOWED_FULFILLMENT = [
   "new", "reviewing", "printing", "packed", "shipped", "fulfilled", "cancelled",
 ];
 const ALLOWED_REQUEST_STATUS = [
   "new", "reviewing", "needs_info", "approved", "in_design", "printing", "completed", "declined",
 ];
+
+// -----------------------------------------------------------------------------
+// CORS — set on EVERY response via setCorsHeaders + sendJson.
+// -----------------------------------------------------------------------------
+const allowedOrigins = [
+  "https://wobblekins.com",
+  "https://www.wobblekins.com",
+  "https://wobblekins-backend.vercel.app",
+];
+
+function setCorsHeaders(req, res) {
+  const origin = req.headers.origin;
+  const allowedOrigin = allowedOrigins.includes(origin)
+    ? origin
+    : "https://www.wobblekins.com";
+  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-admin-key, X-Admin-Key");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  res.setHeader("Cache-Control", "no-store");
+}
+
+// Single response helper — re-applies CORS before sending, so unauthorized,
+// invalid-action, method-not-allowed, Supabase-error and success paths all
+// carry the headers.
+function sendJson(req, res, status, payload) {
+  setCorsHeaders(req, res);
+  return res.status(status).json(payload);
+}
+function jsonOk(req, res, data) {
+  return sendJson(req, res, 200, { ok: true, ...data });
+}
+function jsonError(req, res, status, message) {
+  return sendJson(req, res, status, { ok: false, error: message });
+}
 
 // -----------------------------------------------------------------------------
 // Supabase (service role). Reuses the same env names your other functions use.
@@ -70,46 +104,22 @@ function getSupabase() {
 }
 
 // -----------------------------------------------------------------------------
-// CORS / cache / auth / json helpers
+// Auth (Node lowercases incoming header names, so this catches x-admin-key
+// AND X-Admin-Key from the client).
 // -----------------------------------------------------------------------------
-function setCorsHeaders(req, res) {
-  const origin = req.headers.origin;
-  // Always emit an allow-origin header. If the caller's origin is in the
-  // allowlist, reflect it; otherwise fall back to the primary site origin so
-  // the preflight never comes back with NO header (which is what blocks it).
-  const allowedOrigin = ALLOWED_ORIGINS.includes(origin)
-    ? origin
-    : "https://www.wobblekins.com";
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-admin-key");
-  res.setHeader("Access-Control-Max-Age", "86400");
-}
-function noCache(res) {
-  res.setHeader("Cache-Control", "no-store, max-age=0");
-}
 function requireAdmin(req, res) {
   const provided = req.headers["x-admin-key"];
   const expected = process.env.ADMIN_SECRET_KEY;
   if (!expected) {
     console.error("[forge] ADMIN_SECRET_KEY is not set on the server.");
-    jsonError(res, 500, "Server not configured.");
+    jsonError(req, res, 500, "Server not configured.");
     return false;
   }
   if (!provided || provided !== expected) {
-    jsonError(res, 401, "Unauthorized");
+    jsonError(req, res, 401, "Unauthorized");
     return false;
   }
   return true;
-}
-function jsonOk(res, data) {
-  res.setHeader("Content-Type", "application/json");
-  res.status(200).json({ ok: true, ...data });
-}
-function jsonError(res, status, message) {
-  res.setHeader("Content-Type", "application/json");
-  res.status(status).json({ ok: false, error: message });
 }
 
 // -----------------------------------------------------------------------------
@@ -142,7 +152,7 @@ function readBody(req) {
 }
 
 // =============================================================================
-// ACTION HANDLERS
+// ACTION HANDLERS  (each takes req, res, supabase)
 // =============================================================================
 
 // --- summary -----------------------------------------------------------------
@@ -185,7 +195,7 @@ async function handleSummary(req, res, supabase) {
       "id, created_at, customer_name, email, status"),
   ]);
 
-  return jsonOk(res, {
+  return jsonOk(req, res, {
     counts: {
       ordersTotal, ordersPaid, ordersPending, ordersUnfulfilled,
       requestsTotal, requestsNew, subscribersTotal, productsActive,
@@ -209,7 +219,7 @@ async function handleOrders(req, res, supabase) {
   const { data: orders, error } = await q;
   if (error) {
     console.error("[forge] orders select:", error.message);
-    return jsonError(res, 500, "Failed to load orders.");
+    return jsonError(req, res, 500, "Failed to load orders.");
   }
   const safeOrders = orders || [];
 
@@ -228,7 +238,7 @@ async function handleOrders(req, res, supabase) {
     }
   }
   const withItems = safeOrders.map((o) => ({ ...o, items: itemsByOrder[o[ORDERS_PK]] || [] }));
-  return jsonOk(res, { orders: withItems, limit, offset });
+  return jsonOk(req, res, { orders: withItems, limit, offset });
 }
 
 // --- requests ----------------------------------------------------------------
@@ -245,9 +255,9 @@ async function handleRequests(req, res, supabase) {
   const { data, error } = await q;
   if (error) {
     console.error("[forge] requests select:", error.message);
-    return jsonError(res, 500, "Failed to load requests.");
+    return jsonError(req, res, 500, "Failed to load requests.");
   }
-  return jsonOk(res, { requests: data || [], limit, offset });
+  return jsonOk(req, res, { requests: data || [], limit, offset });
 }
 
 // --- products ----------------------------------------------------------------
@@ -261,9 +271,9 @@ async function handleProducts(req, res, supabase) {
     .range(offset, offset + limit - 1);
   if (error) {
     console.error("[forge] products select:", error.message);
-    return jsonError(res, 500, "Failed to load products.");
+    return jsonError(req, res, 500, "Failed to load products.");
   }
-  return jsonOk(res, { products: data || [], limit, offset });
+  return jsonOk(req, res, { products: data || [], limit, offset });
 }
 
 // --- wobblelist --------------------------------------------------------------
@@ -282,108 +292,108 @@ async function handleWobblelist(req, res, supabase) {
   const { data, error } = await q;
   if (error) {
     console.error("[forge] wobblelist select:", error.message);
-    return jsonError(res, 500, "Failed to load subscribers.");
+    return jsonError(req, res, 500, "Failed to load subscribers.");
   }
-  return jsonOk(res, { subscribers: data || [], limit, offset });
+  return jsonOk(req, res, { subscribers: data || [], limit, offset });
 }
 
 // --- update-order ------------------------------------------------------------
 async function handleUpdateOrder(req, res, supabase) {
   const body = readBody(req);
   const { order_id, fulfillment_status, admin_notes } = body;
-  if (!order_id) return jsonError(res, 400, "order_id is required.");
+  if (!order_id) return jsonError(req, res, 400, "order_id is required.");
 
   const update = {};
   if (fulfillment_status !== undefined) {
     if (!ALLOWED_FULFILLMENT.includes(fulfillment_status)) {
-      return jsonError(res, 400, "Invalid fulfillment_status.");
+      return jsonError(req, res, 400, "Invalid fulfillment_status.");
     }
     update.fulfillment_status = fulfillment_status;
   }
   if (admin_notes !== undefined) {
     update.admin_notes = admin_notes === null ? null : String(admin_notes);
   }
-  if (Object.keys(update).length === 0) return jsonError(res, 400, "Nothing to update.");
+  if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
   update.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase
     .from(TABLES.orders).update(update).eq(ORDERS_PK, order_id).select().single();
   if (error) {
     console.error("[forge] update-order:", error.message);
-    return jsonError(res, 500, "Failed to update order.");
+    return jsonError(req, res, 500, "Failed to update order.");
   }
   // NOTE (future): trigger customer "order update" email here after success.
-  return jsonOk(res, { order: data });
+  return jsonOk(req, res, { order: data });
 }
 
 // --- update-request ----------------------------------------------------------
 async function handleUpdateRequest(req, res, supabase) {
   const body = readBody(req);
   const { request_id, status, admin_notes } = body;
-  if (!request_id) return jsonError(res, 400, "request_id is required.");
+  if (!request_id) return jsonError(req, res, 400, "request_id is required.");
 
   const update = {};
   if (status !== undefined) {
     if (!ALLOWED_REQUEST_STATUS.includes(status)) {
-      return jsonError(res, 400, "Invalid status.");
+      return jsonError(req, res, 400, "Invalid status.");
     }
     update.status = status;
   }
   if (admin_notes !== undefined) {
     update.admin_notes = admin_notes === null ? null : String(admin_notes);
   }
-  if (Object.keys(update).length === 0) return jsonError(res, 400, "Nothing to update.");
+  if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
   update.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase
     .from(TABLES.requests).update(update).eq("id", request_id).select().single();
   if (error) {
     console.error("[forge] update-request:", error.message);
-    return jsonError(res, 500, "Failed to update request.");
+    return jsonError(req, res, 500, "Failed to update request.");
   }
-  return jsonOk(res, { request: data });
+  return jsonOk(req, res, { request: data });
 }
 
 // --- update-product ----------------------------------------------------------
 async function handleUpdateProduct(req, res, supabase) {
   const body = readBody(req);
   const { product_id, is_active, is_featured, stock_quantity, price_cents, admin_notes } = body;
-  if (!product_id) return jsonError(res, 400, "product_id is required.");
+  if (!product_id) return jsonError(req, res, 400, "product_id is required.");
 
   const update = {};
   if (is_active !== undefined) {
     const b = toBoolOrNull(is_active);
-    if (b === null) return jsonError(res, 400, "is_active must be boolean.");
+    if (b === null) return jsonError(req, res, 400, "is_active must be boolean.");
     update.is_active = b;
   }
   if (is_featured !== undefined) {
     const b = toBoolOrNull(is_featured);
-    if (b === null) return jsonError(res, 400, "is_featured must be boolean.");
+    if (b === null) return jsonError(req, res, 400, "is_featured must be boolean.");
     update.is_featured = b;
   }
   if (stock_quantity !== undefined) {
     const n = toIntOrNull(stock_quantity);
-    if (n === null || n < 0) return jsonError(res, 400, "stock_quantity must be a number >= 0.");
+    if (n === null || n < 0) return jsonError(req, res, 400, "stock_quantity must be a number >= 0.");
     update.stock_quantity = n;
   }
   if (price_cents !== undefined) {
     const n = toIntOrNull(price_cents);
-    if (n === null || n < 0) return jsonError(res, 400, "price_cents must be a number >= 0.");
+    if (n === null || n < 0) return jsonError(req, res, 400, "price_cents must be a number >= 0.");
     update.price_cents = n;
   }
   if (admin_notes !== undefined) {
     update.admin_notes = admin_notes === null ? null : String(admin_notes);
   }
-  if (Object.keys(update).length === 0) return jsonError(res, 400, "Nothing to update.");
+  if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
   update.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase
     .from(TABLES.products).update(update).eq("id", product_id).select().single();
   if (error) {
     console.error("[forge] update-product:", error.message);
-    return jsonError(res, 500, "Failed to update product.");
+    return jsonError(req, res, 500, "Failed to update product.");
   }
-  return jsonOk(res, { product: data });
+  return jsonOk(req, res, { product: data });
 }
 
 // =============================================================================
@@ -402,20 +412,22 @@ const POST_ACTIONS = {
   "update-product": handleUpdateProduct,
 };
 
-module.exports = async function handler(req, res) {
-  // CORS first — before auth, action parsing, or anything that can fail —
-  // so EVERY response path (preflight, 401, 404, 405, 500, success) carries
-  // the allow-origin header.
+export default async function handler(req, res) {
+  // 1) CORS first — before auth, action parsing, or anything that can fail.
   setCorsHeaders(req, res);
 
-  // Answer the preflight before checking the admin key. A blocked preflight
-  // is why the key check was never reached.
+  // Diagnostic logs (visible in Vercel -> Deployments -> Functions -> Logs).
+  console.log("Admin API method:", req.method);
+  console.log("Admin API origin:", req.headers.origin);
+  console.log("Admin API action:", req.query && req.query.action);
+
+  // 2) Answer the preflight before checking the admin key.
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return res.status(204).end();
   }
 
+  // 3) Auth (writes a CORS-bearing 401/500 and returns false if it fails).
   if (!requireAdmin(req, res)) return;
-  noCache(res);
 
   const action = (req.query && req.query.action) || "";
 
@@ -424,17 +436,17 @@ module.exports = async function handler(req, res) {
 
     if (req.method === "GET") {
       const fn = GET_ACTIONS[action];
-      if (!fn) return jsonError(res, 404, `Unknown GET action: ${action || "(none)"}`);
+      if (!fn) return jsonError(req, res, 404, `Unknown GET action: ${action || "(none)"}`);
       return await fn(req, res, supabase);
     }
     if (req.method === "POST") {
       const fn = POST_ACTIONS[action];
-      if (!fn) return jsonError(res, 404, `Unknown POST action: ${action || "(none)"}`);
+      if (!fn) return jsonError(req, res, 404, `Unknown POST action: ${action || "(none)"}`);
       return await fn(req, res, supabase);
     }
-    return jsonError(res, 405, "Method not allowed.");
-  } catch (err) {
-    console.error("[forge] admin fatal:", err);
-    return jsonError(res, 500, "Server error.");
+    return jsonError(req, res, 405, "Method not allowed.");
+  } catch (error) {
+    console.error("Admin API error:", error);
+    return sendJson(req, res, 500, { ok: false, error: "Admin API failed." });
   }
-};
+}
