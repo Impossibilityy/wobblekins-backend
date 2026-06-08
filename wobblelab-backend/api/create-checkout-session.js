@@ -44,6 +44,15 @@ const SITE_URL = process.env.WOBBLEKINS_SITE_URL || process.env.SITE_URL || 'htt
 // Countries you ship physical Wobblekins to. Add more as needed: ['US','CA','GB']
 const SHIPPING_COUNTRIES = ['US'];
 
+// Flat-rate shipping shown at checkout. Edit the price/name/estimate here.
+// (amount is in CENTS: 699 = $6.99)
+const SHIPPING_RATE = {
+  display_name: 'Standard Shipping',
+  amount_cents: 699,
+  delivery_min_days: 3,
+  delivery_max_days: 7
+};
+
 export default async function handler(req, res) {
   // CORS headers on EVERY response (set before anything can fail).
   setCorsHeaders(req, res);
@@ -162,6 +171,21 @@ export default async function handler(req, res) {
       line_items,
       client_reference_id: order.id,
       shipping_address_collection: { allowed_countries: SHIPPING_COUNTRIES },
+      // Flat-rate shipping. Stripe adds this to the total and reports it back on
+      // the completed session as total_details.amount_shipping (saved by the webhook).
+      shipping_options: [
+        {
+          shipping_rate_data: {
+            type: 'fixed_amount',
+            fixed_amount: { amount: SHIPPING_RATE.amount_cents, currency: 'usd' },
+            display_name: SHIPPING_RATE.display_name,
+            delivery_estimate: {
+              minimum: { unit: 'business_day', value: SHIPPING_RATE.delivery_min_days },
+              maximum: { unit: 'business_day', value: SHIPPING_RATE.delivery_max_days }
+            }
+          }
+        }
+      ],
       phone_number_collection: { enabled: true },
       metadata: { order_id: order.id },
       payment_intent_data: { metadata: { order_id: order.id } },
