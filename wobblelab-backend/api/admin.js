@@ -152,6 +152,146 @@ function readBody(req) {
 }
 
 // =============================================================================
+// CUSTOMER STATUS EMAILS (via Resend)
+//
+// Best-effort: a failed send NEVER fails the status update. Emails fire only
+// when the status actually CHANGES (handled in the update routes below).
+//
+// To silence a status, delete its entry / set it to null below. `new` is
+// intentionally omitted because your order + request confirmation emails
+// already cover the "we received it" moment.
+//
+// Uses RESEND_API_KEY (already set, since your other emails work) and sends
+// from your verified domain. Edit FROM_EMAIL / REPLY_TO_EMAIL if needed.
+// -----------------------------------------------------------------------------
+const FROM_EMAIL = "The Wobble Lab <requests@wobblekins.com>";
+const REPLY_TO_EMAIL = "genesisforge@wobblekins.com";
+
+const ORDER_STATUS_EMAILS = {
+  // new: null,  // initial state — covered by the order confirmation email
+  reviewing: { accent: "#3b9dff", subject: "We're reviewing your Wobblekins order",
+    heading: "Your order is being reviewed",
+    body: "Our team is looking over your order to make sure every detail is just right before we begin." },
+  printing: { accent: "#ff8a1f", subject: "Your Wobblekins order is being forged",
+    heading: "In the forge",
+    body: "Good news — your order has entered production. Each Wobblekin is made with care, so this is where the magic starts." },
+  packed: { accent: "#ffd23f", subject: "Your Wobblekins order is packed",
+    heading: "Packed and ready",
+    body: "Your order is packed up and ready to leave the workshop. We'll let you know the moment it ships." },
+  shipped: { accent: "#15d0c0", subject: "Your Wobblekins order is on its way",
+    heading: "On its way to you",
+    body: "Your order has shipped and is making its way to you. Keep an eye out — your Wobblekins are almost home." },
+  fulfilled: { accent: "#42d60c", subject: "Your Wobblekins order is complete",
+    heading: "All done",
+    body: "Your order is now complete. We hope your new Wobblekins bring a little wobble of joy. Thank you for adopting from the Wobble Lab." },
+  cancelled: { accent: "#ff3b6b", subject: "Your Wobblekins order has been cancelled",
+    heading: "Your order was cancelled",
+    body: "Your order has been cancelled. If this wasn't expected or you have any questions, just reply to this email and we'll help sort it out." },
+};
+
+const REQUEST_STATUS_EMAILS = {
+  // new: null,  // initial state — covered by the request confirmation email
+  reviewing: { accent: "#3b9dff", subject: "We're reviewing your Wobble Lab request",
+    heading: "Your request is being reviewed",
+    body: "Thanks for your Wobble Lab request! Our team is reviewing the details now and will be in touch soon." },
+  needs_info: { accent: "#ffd23f", subject: "We need a little more info on your Wobble Lab request",
+    heading: "A quick question",
+    body: "We'd love to move your request forward, but we need a little more information first. Please reply to this email and we'll take it from there." },
+  approved: { accent: "#42d60c", subject: "Your Wobble Lab request is approved",
+    heading: "Approved!",
+    body: "Great news — your Wobble Lab request has been approved and is heading into design." },
+  in_design: { accent: "#a85cff", subject: "Your Wobblekin is in design",
+    heading: "In design",
+    body: "Your custom Wobblekin is now being designed. This is where your ideas start taking shape." },
+  printing: { accent: "#ff8a1f", subject: "Your Wobblekin is being forged",
+    heading: "In the forge",
+    body: "Your custom Wobblekin has entered production — made with care, one wobble at a time." },
+  completed: { accent: "#42d60c", subject: "Your Wobble Lab creation is complete",
+    heading: "Complete",
+    body: "Your custom Wobblekin is finished! Thank you for creating something one-of-a-kind with the Wobble Lab." },
+  declined: { accent: "#ff3b6b", subject: "An update on your Wobble Lab request",
+    heading: "About your request",
+    body: "After review, we're not able to move forward with this particular request. If you'd like to know more or try a different idea, just reply — we're happy to help." },
+};
+
+function escapeHtmlEmail(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// Email-safe template: inline styles, web-safe fonts (email clients strip web
+// fonts), dark card with the status accent + a thin rainbow bar for brand feel.
+function renderStatusEmail({ accent, heading, body, customerName, statusLabel, refLabel, refValue, extraHtml }) {
+  const name = customerName ? escapeHtmlEmail(customerName) : "there";
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="margin:0;padding:0;background:#000000;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">${escapeHtmlEmail(heading)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#000000;padding:28px 12px;">
+ <tr><td align="center">
+  <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#0d0d12;border:1px solid rgba(255,255,255,0.12);border-radius:18px;overflow:hidden;">
+   <tr><td style="height:5px;background:${accent};font-size:0;line-height:0;">&nbsp;</td></tr>
+   <tr><td style="height:3px;background:linear-gradient(90deg,#ff3b6b,#ff8a1f,#ffd23f,#42d60c,#15d0c0,#3b9dff,#a85cff,#ff5fd2);font-size:0;line-height:0;">&nbsp;</td></tr>
+   <tr><td style="padding:30px 30px 6px 30px;">
+     <div style="font-family:'Courier New',monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:${accent};">The Wobble Lab</div>
+     <div style="margin-top:10px;font-family:Georgia,'Times New Roman',serif;font-size:26px;line-height:1.15;color:#f4f4f8;font-weight:bold;">${escapeHtmlEmail(heading)}</div>
+   </td></tr>
+   <tr><td style="padding:14px 30px 4px 30px;">
+     <p style="margin:0 0 14px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#d8d8e0;">Hi ${name},</p>
+     <p style="margin:0 0 18px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#d8d8e0;">${escapeHtmlEmail(body)}</p>
+   </td></tr>
+   <tr><td style="padding:0 30px 6px 30px;">
+     <span style="display:inline-block;background:#060608;border:1px solid rgba(255,255,255,0.12);border-radius:999px;padding:8px 16px;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#f4f4f8;">
+       ${escapeHtmlEmail(refLabel)}: <strong style="color:${accent};">${escapeHtmlEmail(refValue)}</strong> &nbsp;&middot;&nbsp; Status: <strong style="color:${accent};">${escapeHtmlEmail(statusLabel)}</strong>
+     </span>
+   </td></tr>
+   ${extraHtml || ""}
+   <tr><td style="padding:22px 30px 30px 30px;">
+     <hr style="border:0;border-top:1px solid rgba(255,255,255,0.12);margin:0 0 16px 0;"/>
+     <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.6;color:#8a8a96;">
+       Questions? Just reply to this email and we'll get back to you.<br/>
+       With wobbles,<br/>The Wobble Lab &middot; wobblekins.com
+     </p>
+   </td></tr>
+  </table>
+ </td></tr>
+</table></body></html>`;
+}
+
+async function sendCustomerEmail({ to, subject, html }) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error("RESEND_API_KEY is not set on the server.");
+  const resp = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: FROM_EMAIL, to: [to], reply_to: REPLY_TO_EMAIL, subject, html }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Resend ${resp.status}: ${text.slice(0, 300)}`);
+  }
+  return true;
+}
+
+// Returns { emailed, emailError }. Never throws.
+async function maybeSendStatusEmail({ map, status, to, customerName, refLabel, refValue, statusLabel, extraHtml }) {
+  const tpl = map[status];
+  if (!tpl) return { emailed: false, emailError: null };        // silenced / no template
+  if (!to) return { emailed: false, emailError: "No customer email on record." };
+  try {
+    const html = renderStatusEmail({
+      accent: tpl.accent, heading: tpl.heading, body: tpl.body,
+      customerName, statusLabel: statusLabel || status, refLabel, refValue, extraHtml,
+    });
+    await sendCustomerEmail({ to, subject: tpl.subject, html });
+    console.log(`[forge] status email sent: ${refLabel} ${refValue} -> ${status} (${to})`);
+    return { emailed: true, emailError: null };
+  } catch (e) {
+    console.error("[forge] status email failed:", e.message);
+    return { emailed: false, emailError: e.message };
+  }
+}
+
+// =============================================================================
 // ACTION HANDLERS  (each takes req, res, supabase)
 // =============================================================================
 
@@ -303,6 +443,15 @@ async function handleUpdateOrder(req, res, supabase) {
   const { order_id, fulfillment_status, admin_notes } = body;
   if (!order_id) return jsonError(req, res, 400, "order_id is required.");
 
+  // Read the current row first so we can tell whether the status actually
+  // changed — we only email on a real change, never on a notes-only save.
+  const { data: existing, error: exErr } = await supabase
+    .from(TABLES.orders).select("*").eq(ORDERS_PK, order_id).single();
+  if (exErr || !existing) {
+    console.error("[forge] update-order load:", exErr && exErr.message);
+    return jsonError(req, res, 404, "Order not found.");
+  }
+
   const update = {};
   if (fulfillment_status !== undefined) {
     if (!ALLOWED_FULFILLMENT.includes(fulfillment_status)) {
@@ -322,8 +471,33 @@ async function handleUpdateOrder(req, res, supabase) {
     console.error("[forge] update-order:", error.message);
     return jsonError(req, res, 500, "Failed to update order.");
   }
-  // NOTE (future): trigger customer "order update" email here after success.
-  return jsonOk(req, res, { order: data });
+
+  // Customer status email — best effort, only on a real status change.
+  let emailResult = { emailed: false, emailError: null };
+  if (update.fulfillment_status && update.fulfillment_status !== existing.fulfillment_status) {
+    const to = data.customer_email || existing.customer_email;
+    const name = data.customer_name || existing.customer_name;
+
+    // Optional tracking block — shown only when shipped AND a tracking value
+    // exists on the order (future-proof; harmless if those columns are absent).
+    let extraHtml = "";
+    if (update.fulfillment_status === "shipped" && (data.tracking_url || data.tracking_number)) {
+      const inner = data.tracking_url
+        ? `<a href="${data.tracking_url}" style="color:#15d0c0;">Track your package</a>`
+        : `Tracking: <strong style="color:#15d0c0;">${escapeHtmlEmail(data.tracking_number)}</strong>`;
+      extraHtml = `<tr><td style="padding:10px 30px 0 30px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#d8d8e0;">${inner}</td></tr>`;
+    }
+
+    emailResult = await maybeSendStatusEmail({
+      map: ORDER_STATUS_EMAILS,
+      status: update.fulfillment_status,
+      to, customerName: name,
+      refLabel: "Order", refValue: String(order_id),
+      statusLabel: update.fulfillment_status, extraHtml,
+    });
+  }
+
+  return jsonOk(req, res, { order: data, emailed: emailResult.emailed, emailError: emailResult.emailError });
 }
 
 // --- update-request ----------------------------------------------------------
@@ -331,6 +505,14 @@ async function handleUpdateRequest(req, res, supabase) {
   const body = readBody(req);
   const { request_id, status, admin_notes } = body;
   if (!request_id) return jsonError(req, res, 400, "request_id is required.");
+
+  // Read the current row first so we only email on a real status change.
+  const { data: existing, error: exErr } = await supabase
+    .from(TABLES.requests).select("*").eq("id", request_id).single();
+  if (exErr || !existing) {
+    console.error("[forge] update-request load:", exErr && exErr.message);
+    return jsonError(req, res, 404, "Request not found.");
+  }
 
   const update = {};
   if (status !== undefined) {
@@ -351,7 +533,22 @@ async function handleUpdateRequest(req, res, supabase) {
     console.error("[forge] update-request:", error.message);
     return jsonError(req, res, 500, "Failed to update request.");
   }
-  return jsonOk(req, res, { request: data });
+
+  // Customer status email — best effort, only on a real status change.
+  let emailResult = { emailed: false, emailError: null };
+  if (update.status && update.status !== existing.status) {
+    const to = data.email || existing.email || data.customer_email || existing.customer_email;
+    const name = data.customer_name || existing.customer_name;
+    emailResult = await maybeSendStatusEmail({
+      map: REQUEST_STATUS_EMAILS,
+      status: update.status,
+      to, customerName: name,
+      refLabel: "Request", refValue: String(request_id),
+      statusLabel: update.status,
+    });
+  }
+
+  return jsonOk(req, res, { request: data, emailed: emailResult.emailed, emailError: emailResult.emailError });
 }
 
 // --- update-product ----------------------------------------------------------
