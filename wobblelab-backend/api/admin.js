@@ -33,6 +33,7 @@ const TABLES = {
   requests: "wobblekin_requests",
   products: "wobblekin_products",
   subscribers: "wobblelist_subscribers",
+  conceptQueue: "wobblekin_concept_queue",
 };
 
 // Column on wobblekin_order_items that points back at an order's primary key.
@@ -45,6 +46,9 @@ const ALLOWED_FULFILLMENT = [
 ];
 const ALLOWED_REQUEST_STATUS = [
   "new", "reviewing", "needs_info", "approved", "in_design", "printing", "completed", "declined",
+];
+const ALLOWED_CONCEPT_STATUS = [
+  "generated", "needs_review", "approved", "needs_revision", "rejected",
 ];
 
 // -----------------------------------------------------------------------------
@@ -593,234 +597,73 @@ async function handleUpdateProduct(req, res, supabase) {
   return jsonOk(req, res, { product: data });
 }
 
+// --- concepts (Creative Pipeline staging queue) ------------------------------
+async function handleConcepts(req, res, supabase) {
+  const { status } = req.query || {};
+  const limit = parseIntParam(req.query?.limit, 200, { min: 1, max: 500 });
+  const offset = parseIntParam(req.query?.offset, 0, { min: 0, max: 100000 });
+
+  let q = supabase.from(TABLES.conceptQueue).select("*")
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (status) q = q.eq("status", status);
+
+  const { data, error } = await q;
+  if (error) {
+    console.error("[forge] concepts select:", error.message);
+    return jsonError(req, res, 500, "Failed to load concepts.");
+  }
+  return jsonOk(req, res, { concepts: data || [], limit, offset });
+}
+
+async function handleUpdateConcept(req, res, supabase) {
+  const body = readBody(req);
+  const { concept_id, status, review_notes } = body;
+  if (!concept_id) return jsonError(req, res, 400, "concept_id is required.");
+
+  const update = {};
+  if (status !== undefined) {
+    if (!ALLOWED_CONCEPT_STATUS.includes(status)) {
+      return jsonError(req, res, 400, "Invalid status.");
+    }
+    update.status = status;
+    update.approved = status === "approved"; // flag tracks the queue status only
+  }
+  if (review_notes !== undefined) {
+    update.review_notes = review_notes === null ? null : String(review_notes);
+  }
+  if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
+  update.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from(TABLES.conceptQueue).update(update).eq("id", concept_id).select().single();
+  if (error) {
+    console.error("[forge] update-concept:", error.message);
+    return jsonError(req, res, 500, "Failed to update concept.");
+  }
+
+  // NOTE (future): when status === "approved", a later phase will COPY this row
+  // into wobblekin_products and/or a Wobbledex table. For now, approval ONLY
+  // changes the queue status — nothing is published automatically.
+  return jsonOk(req, res, { concept: data });
+}
+
 // =============================================================================
 // ROUTER
 // =============================================================================
-// =============================================================================
-// CUSTOMER ACCOUNTS — ADD-ON HANDLERS
-// Requires the wobblekins-accounts.sql migration (customer_profiles + user_id).
-// Reuses getSupabase (service role), readBody, jsonOk/jsonError, TABLES,
-// ORDER_ITEMS_FK, ORDERS_PK, sendCustomerEmail — all defined above.
-// For account-send-reset, ensure SITE_URL + "/account" is listed under
-// Supabase -> Authentication -> URL Configuration -> Redirect URLs.
-// =============================================================================
-
-const SITE_URL = process.env.SITE_URL || "https://www.wobblekins.com";
-const PROFILES_TABLE = "customer_profiles";
-
-async function findAccountByEmail(supabase, email) {
-  const { data: profiles } = await supabase
-    .from(PROFILES_TABLE).select("*").ilike("email", email).limit(1);
-  const profile = (profiles && profiles[0]) || null;
-  let authUser = null;
-  if (profile && profile.user_id) {
-    const { data } = await supabase.auth.admin.getUserById(profile.user_id);
-    authUser = (data && data.user) || null;
-  }
-  return { profile, authUser };
-}
-
-function shapeAccount(authUser) {
-  if (!authUser) return null;
-  return {
-    user_id: authUser.id,
-    login_email: authUser.email,
-    email_confirmed: !!authUser.email_confirmed_at,
-    created_at: authUser.created_at,
-    last_sign_in_at: authUser.last_sign_in_at || null,
-    banned_until: authUser.banned_until || null,
-    is_banned: !!(authUser.banned_until && new Date(authUser.banned_until) > new Date()),
-  };
-}
-
-// --- GET customer ------------------------------------------------------------
-async function handleCustomer(req, res, supabase) {
-  const email = ((req.query && req.query.email) || "").trim();
-  const uidParam = (req.query && req.query.user_id) || null;
-  if (!email && !uidParam) return jsonError(req, res, 400, "email or user_id is required.");
-
-  let profile = null, authUser = null, userId = uidParam;
-  if (uidParam) {
-    const { data: pr } = await supabase.from(PROFILES_TABLE).select("*").eq("user_id", uidParam).limit(1);
-    profile = (pr && pr[0]) || null;
-    const { data } = await supabase.auth.admin.getUserById(uidParam);
-    authUser = (data && data.user) || null;
-  } else {
-    const found = await findAccountByEmail(supabase, email);
-    profile = found.profile;
-    authUser = found.authUser;
-    userId = profile && profile.user_id;
-  }
-  const lookupEmail = email || (authUser && authUser.email) || (profile && profile.email);
-
-  let orders = [];
-  if (lookupEmail) {
-    const { data } = await supabase.from(TABLES.orders).select("*")
-      .ilike("customer_email", lookupEmail).order("created_at", { ascending: false });
-    orders = data || [];
-  }
-  if (userId) {
-    const { data } = await supabase.from(TABLES.orders).select("*")
-      .eq("user_id", userId).order("created_at", { ascending: false });
-    (data || []).forEach((o) => { if (!orders.some((x) => x[ORDERS_PK] === o[ORDERS_PK])) orders.push(o); });
-  }
-  orders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-  if (orders.length) {
-    const ids = orders.map((o) => o[ORDERS_PK]);
-    const { data: its } = await supabase.from(TABLES.orderItems).select("*").in(ORDER_ITEMS_FK, ids);
-    const byOrder = {};
-    (its || []).forEach((it) => { (byOrder[it[ORDER_ITEMS_FK]] = byOrder[it[ORDER_ITEMS_FK]] || []).push(it); });
-    orders = orders.map((o) => Object.assign({}, o, { items: byOrder[o[ORDERS_PK]] || [] }));
-  }
-
-  let requests = [], subscriber = null;
-  if (lookupEmail) {
-    const r = await supabase.from(TABLES.requests).select("*")
-      .ilike("email", lookupEmail).order("created_at", { ascending: false });
-    requests = r.data || [];
-    const s = await supabase.from(TABLES.subscribers).select("*").ilike("email", lookupEmail).limit(1);
-    subscriber = (s.data && s.data[0]) || null;
-  }
-
-  const paidSpentCents = orders.reduce((sum, o) =>
-    sum + (String(o.status || "").toLowerCase() === "paid" ? (Number(o.total_cents) || 0) : 0), 0);
-
-  return jsonOk(req, res, {
-    lookupEmail,
-    hasAccount: !!authUser,
-    account: shapeAccount(authUser),
-    profile,
-    orders,
-    orderCount: orders.length,
-    paidSpentCents,
-    requests,
-    requestCount: requests.length,
-    subscriber,
-  });
-}
-
-// --- POST account-set-display-name ------------------------------------------
-async function handleAccountSetDisplayName(req, res, supabase) {
-  const { user_id, display_name } = readBody(req);
-  if (!user_id) return jsonError(req, res, 400, "user_id is required.");
-  const { data, error } = await supabase.from(PROFILES_TABLE)
-    .update({ display_name: display_name == null ? null : String(display_name) })
-    .eq("user_id", user_id).select().single();
-  if (error) { console.error("[forge] set-display-name:", error.message);
-    return jsonError(req, res, 500, "Failed to update display name."); }
-  return jsonOk(req, res, { profile: data });
-}
-
-// --- POST account-set-email --------------------------------------------------
-async function handleAccountSetEmail(req, res, supabase) {
-  const { user_id, new_email, confirm_immediately } = readBody(req);
-  if (!user_id || !new_email) return jsonError(req, res, 400, "user_id and new_email are required.");
-  const email = String(new_email).trim();
-  const update = { email };
-  if (confirm_immediately !== false) update.email_confirm = true; // default: trust the admin
-  const { error } = await supabase.auth.admin.updateUserById(user_id, update);
-  if (error) { console.error("[forge] set-email:", error.message);
-    return jsonError(req, res, 400, error.message || "Failed to update email."); }
-  await supabase.from(PROFILES_TABLE).update({ email }).eq("user_id", user_id);
-  return jsonOk(req, res, {
-    user_id, email,
-    note: "Login email updated. Orders linked by user_id stay linked; the customer can now also see orders matching the new email.",
-  });
-}
-
-// --- POST account-confirm-email ---------------------------------------------
-async function handleAccountConfirmEmail(req, res, supabase) {
-  const { user_id } = readBody(req);
-  if (!user_id) return jsonError(req, res, 400, "user_id is required.");
-  const { error } = await supabase.auth.admin.updateUserById(user_id, { email_confirm: true });
-  if (error) { console.error("[forge] confirm-email:", error.message);
-    return jsonError(req, res, 400, error.message || "Failed to confirm email."); }
-  return jsonOk(req, res, { user_id, confirmed: true });
-}
-
-// --- POST account-send-reset -------------------------------------------------
-async function handleAccountSendReset(req, res, supabase) {
-  const { email } = readBody(req);
-  if (!email) return jsonError(req, res, 400, "email is required.");
-  const to = String(email).trim();
-
-  const { data, error } = await supabase.auth.admin.generateLink({
-    type: "recovery",
-    email: to,
-    options: { redirectTo: SITE_URL + "/account" },
-  });
-  if (error) { console.error("[forge] send-reset:", error.message);
-    return jsonError(req, res, 400, error.message || "Failed to generate reset link."); }
-  const link = (data && data.properties && data.properties.action_link) || null;
-
-  // Best-effort send through the existing Resend helper. The link is returned
-  // regardless, so the console can offer a copy/paste fallback.
-  let emailed = false, emailError = null;
-  if (link) {
-    try {
-      await sendCustomerEmail({
-        to,
-        subject: "Reset your Wobblekins password",
-        html:
-          '<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:14px;line-height:1.5;">' +
-          "<p>We received a request to reset your Wobblekins password.</p>" +
-          '<p><a href="' + link + '" style="color:#3b9dff;">Click here to set a new password</a></p>' +
-          "<p>If you didn't request this, you can safely ignore this email.</p></div>",
-      });
-      emailed = true;
-    } catch (e) { emailError = e.message; }
-  }
-  return jsonOk(req, res, { sent_to: to, emailed, emailError, reset_link: link });
-}
-
-// --- POST account-set-ban ----------------------------------------------------
-async function handleAccountSetBan(req, res, supabase) {
-  const { user_id, banned } = readBody(req);
-  if (!user_id || typeof banned !== "boolean")
-    return jsonError(req, res, 400, "user_id and banned (boolean) are required.");
-  const ban_duration = banned ? "876000h" : "none"; // ~100 years, or lift the ban
-  const { error } = await supabase.auth.admin.updateUserById(user_id, { ban_duration });
-  if (error) { console.error("[forge] set-ban:", error.message);
-    return jsonError(req, res, 400, error.message || "Failed to update ban state."); }
-  return jsonOk(req, res, { user_id, banned });
-}
-
-// --- POST account-delete -----------------------------------------------------
-async function handleAccountDelete(req, res, supabase) {
-  const { user_id, confirm } = readBody(req);
-  if (!user_id) return jsonError(req, res, 400, "user_id is required.");
-  if (confirm !== true)
-    return jsonError(req, res, 400, "Set confirm:true to permanently delete this account.");
-  const { error } = await supabase.auth.admin.deleteUser(user_id);
-  if (error) { console.error("[forge] delete-account:", error.message);
-    return jsonError(req, res, 400, error.message || "Failed to delete account."); }
-  // customer_profiles cascades; orders.user_id is ON DELETE SET NULL, so order
-  // history is preserved and re-links if the same email signs up again.
-  return jsonOk(req, res, {
-    user_id, deleted: true,
-    note: "Auth account + profile removed. Orders preserved with user_id cleared.",
-  });
-}
-
 const GET_ACTIONS = {
   summary: handleSummary,
   orders: handleOrders,
   requests: handleRequests,
   products: handleProducts,
   wobblelist: handleWobblelist,
-  customer: handleCustomer,
+  concepts: handleConcepts,
 };
 const POST_ACTIONS = {
   "update-order": handleUpdateOrder,
   "update-request": handleUpdateRequest,
   "update-product": handleUpdateProduct,
-  "account-set-display-name": handleAccountSetDisplayName,
-  "account-set-email": handleAccountSetEmail,
-  "account-confirm-email": handleAccountConfirmEmail,
-  "account-send-reset": handleAccountSendReset,
-  "account-set-ban": handleAccountSetBan,
-  "account-delete": handleAccountDelete,
+  "update-concept": handleUpdateConcept,
 };
 
 export default async function handler(req, res) {
