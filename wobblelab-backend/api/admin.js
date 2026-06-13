@@ -48,7 +48,7 @@ const ALLOWED_REQUEST_STATUS = [
   "new", "reviewing", "needs_info", "approved", "in_design", "printing", "completed", "declined",
 ];
 const ALLOWED_CONCEPT_STATUS = [
-  "generated", "needs_review", "approved", "needs_revision", "rejected",
+  "generated", "needs_review", "ready", "approved", "needs_revision", "rejected",
 ];
 
 // -----------------------------------------------------------------------------
@@ -618,7 +618,7 @@ async function handleConcepts(req, res, supabase) {
 
 async function handleUpdateConcept(req, res, supabase) {
   const body = readBody(req);
-  const { concept_id, status, review_notes } = body;
+  const { concept_id, status, review_notes, used, claimed_at } = body;
   if (!concept_id) return jsonError(req, res, 400, "concept_id is required.");
 
   const update = {};
@@ -631,6 +631,19 @@ async function handleUpdateConcept(req, res, supabase) {
   }
   if (review_notes !== undefined) {
     update.review_notes = review_notes === null ? null : String(review_notes);
+  }
+  if (used !== undefined) {
+    const b = toBoolOrNull(used);
+    if (b === null) return jsonError(req, res, 400, "used must be boolean.");
+    update.used = b;
+  }
+  if (claimed_at !== undefined) {
+    // Clients may only CLEAR claimed_at (Return to Queue). Claiming sets it
+    // server-side via the claim function — never trust a client timestamp.
+    if (claimed_at !== null) {
+      return jsonError(req, res, 400, "claimed_at can only be cleared (null).");
+    }
+    update.claimed_at = null;
   }
   if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
   update.updated_at = new Date().toISOString();
@@ -646,6 +659,20 @@ async function handleUpdateConcept(req, res, supabase) {
   // into wobblekin_products and/or a Wobbledex table. For now, approval ONLY
   // changes the queue status — nothing is published automatically.
   return jsonOk(req, res, { concept: data });
+}
+
+// Reveal/claim ONE random unused, ready concept — atomic, race-safe (see
+// migrations/concept-queue-claim-function.sql). Returns { concept: null,
+// empty: true } when the vault is empty.
+async function handleClaimConcept(req, res, supabase) {
+  const { data, error } = await supabase.rpc("claim_next_wobblekin_concept");
+  if (error) {
+    console.error("[forge] claim-concept:", error.message);
+    return jsonError(req, res, 500, "Failed to reveal concept.");
+  }
+  const concept = Array.isArray(data) ? data[0] : data;
+  if (!concept) return jsonOk(req, res, { concept: null, empty: true });
+  return jsonOk(req, res, { concept });
 }
 
 // =============================================================================
@@ -664,6 +691,7 @@ const POST_ACTIONS = {
   "update-request": handleUpdateRequest,
   "update-product": handleUpdateProduct,
   "update-concept": handleUpdateConcept,
+  "claim-concept": handleClaimConcept,
 };
 
 export default async function handler(req, res) {
