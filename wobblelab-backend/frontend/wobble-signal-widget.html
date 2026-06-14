@@ -84,6 +84,9 @@
 </div>
 
 <style>
+  /* Remove this @import if you prefer to inherit the fonts loaded by your site. */
+  @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Outfit:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap");
+
   #wk-signal,
   #wk-signal * {
     box-sizing: border-box;
@@ -95,6 +98,7 @@
     --wk-card-2: #0d0d12;
     --wk-line: rgba(255, 255, 255, 0.12);
     --wk-line-strong: rgba(255, 255, 255, 0.22);
+    --wk-glow: rgba(255, 255, 255, 0.28);
     --wk-ink: #f4f4f8;
     --wk-muted: rgba(244, 244, 248, 0.66);
     --wk-soft: rgba(244, 244, 248, 0.42);
@@ -102,10 +106,11 @@
     --wk-c2: #ff8a1f;
     --wk-c3: #ffd23f;
     --wk-c4: #42d60c;
-    --wk-c5: #18d6c8;
-    --wk-c6: #3794ff;
-    --wk-c7: #8c5cff;
-    --wk-c8: #ed4cff;
+    --wk-c5: #15d0c0;
+    --wk-c6: #3b9dff;
+    --wk-c7: #a85cff;
+    --wk-c8: #ff5fd2;
+    --wk-rainbow: linear-gradient(90deg, #ff3b6b, #ff8a1f, #ffd23f, #42d60c, #15d0c0, #3b9dff, #a85cff, #ff5fd2);
     position: relative;
     isolation: isolate;
     width: 100%;
@@ -113,7 +118,7 @@
     overflow: hidden;
     color: var(--wk-ink);
     background: var(--wk-bg);
-    font-family: "Cute Dino", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif;
+    font-family: "Outfit", system-ui, sans-serif;
   }
 
   .wk-signal__aurora {
@@ -122,8 +127,8 @@
     inset: -35%;
     background:
       radial-gradient(circle at 15% 45%, rgba(255, 59, 107, 0.17), transparent 24%),
-      radial-gradient(circle at 82% 18%, rgba(55, 148, 255, 0.16), transparent 25%),
-      radial-gradient(circle at 72% 80%, rgba(140, 92, 255, 0.15), transparent 24%),
+      radial-gradient(circle at 82% 18%, rgba(59, 157, 255, 0.16), transparent 25%),
+      radial-gradient(circle at 72% 80%, rgba(168, 92, 255, 0.15), transparent 24%),
       radial-gradient(circle at 35% 95%, rgba(66, 214, 12, 0.09), transparent 22%);
     filter: blur(28px);
     animation: wk-signal-drift 12s ease-in-out infinite alternate;
@@ -164,7 +169,7 @@
     background: rgba(13, 13, 18, 0.84);
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
     color: rgba(255,255,255,0.8);
-    font: 800 11px/1 system-ui, sans-serif;
+    font: 700 11px/1 "Space Mono", monospace;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -173,15 +178,21 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--wk-c1);
-    box-shadow: 0 0 0 4px rgba(255,59,107,0.12), 0 0 16px rgba(255,59,107,0.72);
+    background: var(--wk-c6);
+    box-shadow: 0 0 0 4px rgba(59,157,255,0.12), 0 0 16px rgba(59,157,255,0.72);
     animation: wk-signal-pulse 1.8s ease-in-out infinite;
   }
 
   .wk-signal__frequency {
     padding-left: 9px;
     border-left: 1px solid var(--wk-line);
-    color: var(--wk-soft);
+  }
+
+  .wk-signal__eyebrow > span:not(.wk-signal__live-dot) {
+    background: var(--wk-rainbow);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 
   .wk-signal__heading-row {
@@ -194,21 +205,20 @@
   .wk-signal__title {
     max-width: 780px;
     margin: 0;
+    font-family: "Bricolage Grotesque", "Outfit", system-ui, sans-serif;
+    font-weight: 800;
     font-size: clamp(34px, 6vw, 68px);
     line-height: 0.96;
     letter-spacing: -0.045em;
     text-wrap: balance;
-    background: linear-gradient(90deg, var(--wk-ink), #fff 45%, rgba(255,255,255,0.7));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    color: var(--wk-ink);
   }
 
   .wk-signal__intro {
     max-width: 690px;
     margin: 16px 0 0;
     color: var(--wk-muted);
-    font: 500 clamp(15px, 2vw, 18px)/1.65 system-ui, sans-serif;
+    font: 500 clamp(15px, 2vw, 18px)/1.65 "Outfit", system-ui, sans-serif;
   }
 
   .wk-signal__meter {
@@ -237,6 +247,8 @@
   .wk-signal__meter span:nth-child(5) { height: 60%; animation-delay: -1s; }
 
   .wk-signal__card {
+    --wk-pop: var(--wk-c6);
+    --wk-pop-rgb: 59, 157, 255;
     position: relative;
     display: grid;
     grid-template-columns: minmax(280px, 0.92fr) minmax(340px, 1.08fr);
@@ -247,6 +259,16 @@
       linear-gradient(135deg, rgba(255,255,255,0.055), transparent 30%),
       var(--wk-card);
     box-shadow: 0 30px 90px rgba(0,0,0,0.62), inset 0 1px 0 rgba(255,255,255,0.06);
+    transition: transform 220ms ease, border-color 220ms ease, box-shadow 220ms ease;
+  }
+
+  .wk-signal__card:hover {
+    transform: translateY(-4px);
+    border-color: rgba(var(--wk-pop-rgb), 0.62);
+    box-shadow:
+      0 36px 100px rgba(0,0,0,0.68),
+      0 0 38px rgba(var(--wk-pop-rgb), 0.18),
+      inset 0 1px 0 rgba(255,255,255,0.07);
   }
 
   .wk-signal__card::before {
@@ -255,9 +277,8 @@
     z-index: 5;
     inset: 0 0 auto;
     height: 3px;
-    background: linear-gradient(90deg,
-      var(--wk-c1), var(--wk-c2), var(--wk-c3), var(--wk-c4),
-      var(--wk-c5), var(--wk-c6), var(--wk-c7), var(--wk-c8));
+    background: var(--wk-pop);
+    box-shadow: 0 0 22px rgba(var(--wk-pop-rgb), 0.55);
   }
 
   .wk-signal__media {
@@ -266,7 +287,7 @@
     overflow: hidden;
     border-right: 1px solid var(--wk-line);
     background:
-      radial-gradient(circle at 50% 45%, rgba(55,148,255,0.12), transparent 36%),
+      radial-gradient(circle at 50% 45%, rgba(59,157,255,0.12), transparent 36%),
       #030305;
   }
 
@@ -298,7 +319,7 @@
     width: 100%;
     height: 16%;
     pointer-events: none;
-    background: linear-gradient(to bottom, transparent, rgba(24,214,200,0.2), transparent);
+    background: linear-gradient(to bottom, transparent, rgba(59,157,255,0.2), transparent);
     animation: wk-signal-scan 5.2s linear infinite;
     mix-blend-mode: screen;
   }
@@ -312,7 +333,7 @@
     justify-items: center;
     gap: 20px;
     color: var(--wk-soft);
-    font: 800 11px/1.3 system-ui, sans-serif;
+    font: 700 11px/1.3 "Space Mono", monospace;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -322,14 +343,14 @@
     width: 126px;
     aspect-ratio: 1;
     overflow: hidden;
-    border: 1px solid rgba(24,214,200,0.35);
+    border: 1px solid rgba(59,157,255,0.35);
     border-radius: 50%;
     background:
-      radial-gradient(circle, transparent 18%, rgba(24,214,200,0.18) 19%, transparent 20%, transparent 38%, rgba(24,214,200,0.12) 39%, transparent 40%),
-      linear-gradient(rgba(24,214,200,0.12) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(24,214,200,0.12) 1px, transparent 1px);
+      radial-gradient(circle, transparent 18%, rgba(59,157,255,0.18) 19%, transparent 20%, transparent 38%, rgba(59,157,255,0.12) 39%, transparent 40%),
+      linear-gradient(rgba(59,157,255,0.12) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59,157,255,0.12) 1px, transparent 1px);
     background-size: 100% 100%, 21px 21px, 21px 21px;
-    box-shadow: 0 0 45px rgba(24,214,200,0.13);
+    box-shadow: 0 0 45px rgba(59,157,255,0.13);
   }
 
   .wk-signal__radar-line {
@@ -338,7 +359,7 @@
     width: 49%;
     height: 2px;
     transform-origin: 100% 50%;
-    background: linear-gradient(90deg, rgba(24,214,200,0), rgba(24,214,200,0.95));
+    background: linear-gradient(90deg, rgba(59,157,255,0), rgba(59,157,255,0.95));
     animation: wk-signal-radar 2.2s linear infinite;
   }
 
@@ -349,8 +370,8 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--wk-c5);
-    box-shadow: 0 0 18px var(--wk-c5);
+    background: var(--wk-pop);
+    box-shadow: 0 0 18px var(--wk-pop);
   }
 
   .wk-signal__play {
@@ -366,7 +387,7 @@
     border: 1px solid rgba(255,255,255,0.36);
     border-radius: 50%;
     background: rgba(0,0,0,0.48);
-    box-shadow: 0 12px 45px rgba(0,0,0,0.5), 0 0 34px rgba(140,92,255,0.28);
+    box-shadow: 0 12px 45px rgba(0,0,0,0.5), 0 0 34px rgba(168,92,255,0.28);
     backdrop-filter: blur(12px);
   }
 
@@ -376,7 +397,7 @@
     margin-left: 5px;
     border-top: 10px solid transparent;
     border-bottom: 10px solid transparent;
-    border-left: 16px solid white;
+    border-left: 16px solid var(--wk-pop);
   }
 
   .wk-signal__media-badge {
@@ -385,11 +406,11 @@
     top: 20px;
     left: 20px;
     padding: 8px 11px;
-    border: 1px solid rgba(255,255,255,0.2);
+    border: 1px solid rgba(var(--wk-pop-rgb), 0.34);
     border-radius: 999px;
     background: rgba(0,0,0,0.62);
-    color: white;
-    font: 900 10px/1 system-ui, sans-serif;
+    color: var(--wk-pop);
+    font: 700 10px/1 "Space Mono", monospace;
     letter-spacing: 0.13em;
     text-transform: uppercase;
     backdrop-filter: blur(9px);
@@ -401,7 +422,7 @@
     min-width: 0;
     padding: clamp(28px, 5vw, 58px);
     background:
-      radial-gradient(circle at 95% 0%, rgba(140,92,255,0.12), transparent 32%),
+      radial-gradient(circle at 95% 0%, rgba(168,92,255,0.12), transparent 32%),
       linear-gradient(145deg, rgba(13,13,18,0.98), rgba(6,6,8,0.98));
   }
 
@@ -411,18 +432,18 @@
     align-items: center;
     gap: 10px 14px;
     margin-bottom: 28px;
-    font: 800 10px/1.2 system-ui, sans-serif;
+    font: 700 10px/1.2 "Space Mono", monospace;
     letter-spacing: 0.13em;
     text-transform: uppercase;
   }
 
   .wk-signal__label {
     padding: 8px 11px;
-    border: 1px solid rgba(237,76,255,0.34);
+    border: 1px solid rgba(var(--wk-pop-rgb), 0.34);
     border-radius: 999px;
-    color: #fff;
-    background: linear-gradient(90deg, rgba(55,148,255,0.15), rgba(237,76,255,0.15));
-    box-shadow: 0 0 22px rgba(140,92,255,0.12);
+    color: var(--wk-pop);
+    background: rgba(var(--wk-pop-rgb), 0.11);
+    box-shadow: 0 0 22px rgba(var(--wk-pop-rgb), 0.12);
   }
 
   .wk-signal__date {
@@ -435,7 +456,7 @@
     margin: 0;
     overflow: hidden;
     color: var(--wk-ink);
-    font: 700 clamp(22px, 3.3vw, 38px)/1.2 "Cute Dino", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif;
+    font: 700 clamp(22px, 3.3vw, 38px)/1.2 "Bricolage Grotesque", "Outfit", system-ui, sans-serif;
     letter-spacing: -0.025em;
     text-wrap: pretty;
     -webkit-line-clamp: 7;
@@ -462,14 +483,16 @@
     overflow: hidden;
     border: 1px solid rgba(255,255,255,0.22);
     border-radius: 14px;
-    color: #fff;
-    background: linear-gradient(100deg, #245dff, #884dff 58%, #df3fff);
-    box-shadow: 0 12px 34px rgba(79,74,255,0.24);
-    font: 900 12px/1 system-ui, sans-serif;
+    color: #0a0a0f;
+    background: var(--wk-rainbow);
+    background-size: 200% 100%;
+    background-position: 0% 50%;
+    box-shadow: 0 12px 34px rgba(59,157,255,0.22);
+    font: 700 12px/1 "Space Mono", monospace;
     letter-spacing: 0.08em;
     text-decoration: none;
     text-transform: uppercase;
-    transition: transform 180ms ease, filter 180ms ease, box-shadow 180ms ease;
+    transition: transform 180ms ease, filter 180ms ease, box-shadow 180ms ease, background-position 320ms ease;
   }
 
   .wk-signal__button::after {
@@ -483,8 +506,9 @@
 
   .wk-signal__button:hover {
     transform: translateY(-2px);
-    filter: brightness(1.08);
-    box-shadow: 0 16px 42px rgba(79,74,255,0.34);
+    filter: brightness(1.05);
+    background-position: 100% 50%;
+    box-shadow: 0 16px 42px rgba(168,92,255,0.28);
   }
 
   .wk-signal__button:hover::after {
@@ -492,7 +516,12 @@
   }
 
   .wk-signal__button-icon {
+    color: #0a0a0f;
     font-size: 11px;
+  }
+
+  .wk-signal__button-text {
+    color: #0a0a0f;
   }
 
   .wk-signal__page-link {
@@ -500,13 +529,19 @@
     align-items: center;
     gap: 7px;
     color: var(--wk-muted);
-    font: 700 12px/1.3 system-ui, sans-serif;
+    font: 700 12px/1.3 "Outfit", system-ui, sans-serif;
     text-decoration: none;
-    transition: color 180ms ease;
+    transition: color 180ms ease, transform 180ms ease;
   }
 
   .wk-signal__page-link:hover {
     color: #fff;
+    transform: translateY(-1px);
+  }
+
+  .wk-signal__page-link > span[aria-hidden="true"] {
+    color: var(--wk-c6);
+    text-shadow: 0 0 12px rgba(59,157,255,0.42);
   }
 
   .wk-signal__footer-line {
@@ -517,7 +552,7 @@
     padding-top: 18px;
     border-top: 1px solid var(--wk-line);
     color: rgba(255,255,255,0.32);
-    font: 800 9px/1.3 system-ui, sans-serif;
+    font: 700 9px/1.3 "Space Mono", monospace;
     letter-spacing: 0.13em;
     text-transform: uppercase;
   }
@@ -528,6 +563,21 @@
 
   .wk-signal__card[data-state="error"] .wk-signal__status {
     color: rgba(255,210,63,0.82);
+  }
+
+  /*
+   * Per-word rainbow colorizer output.
+   * Semantic statuses, gradient kicker text, item-hue labels, and the dark
+   * primary-button copy are intentionally excluded from word coloring.
+   */
+  .wk-rainbow-word {
+    color: var(--wk-word-color, inherit);
+    transition: color 180ms ease, text-shadow 180ms ease;
+  }
+
+  .wk-signal__button:hover .wk-rainbow-word,
+  .wk-signal__page-link:hover .wk-rainbow-word {
+    text-shadow: 0 0 14px currentColor;
   }
 
   @keyframes wk-signal-pulse {
@@ -623,8 +673,16 @@
       animation: none !important;
     }
 
-    .wk-signal__button {
+    .wk-signal__card,
+    .wk-signal__button,
+    .wk-signal__page-link {
       transition: none;
+    }
+
+    .wk-signal__card:hover,
+    .wk-signal__button:hover,
+    .wk-signal__page-link:hover {
+      transform: none;
     }
   }
 </style>
@@ -659,6 +717,104 @@
 
   var root = document.getElementById("wk-signal");
   if (!root) return;
+
+  /*
+   * PER-WORD RAINBOW COLORIZER
+   * Edit PALETTE, STEP, or COLOR_TARGETS below without touching the renderer.
+   * STEP = 3 creates a lively scattered rhythm; STEP = 1 creates a smooth spectrum.
+   */
+  var COLORIZER = {
+    PALETTE: [
+      "#ff3b6b",
+      "#ff8a1f",
+      "#ffd23f",
+      "#42d60c",
+      "#15d0c0",
+      "#3b9dff",
+      "#a85cff",
+      "#ff5fd2"
+    ],
+    STEP: 3,
+    COLOR_TARGETS: [
+      ".wk-signal__title",
+      ".wk-signal__intro",
+      ".wk-signal__media-placeholder > span:last-child",
+      ".wk-signal__date",
+      ".wk-signal__message",
+      ".wk-signal__page-link",
+      ".wk-signal__footer-line > span:not(.wk-signal__status)"
+    ]
+  };
+
+  var rainbowCounter = 0;
+
+  function unwrapRainbowWords() {
+    root.querySelectorAll('.wk-rainbow-word[data-wk-rainbow="true"]').forEach(function (word) {
+      word.replaceWith(document.createTextNode(word.textContent || ""));
+    });
+
+    root.querySelectorAll(COLORIZER.COLOR_TARGETS.join(",")).forEach(function (target) {
+      target.normalize();
+    });
+  }
+
+  function shouldSkipTextNode(textNode) {
+    var parent = textNode.parentElement;
+    if (!parent) return true;
+
+    return Boolean(parent.closest(
+      "em, .wk-rainbow-skip, .wk-rainbow-word, script, style, [aria-hidden='true']"
+    ));
+  }
+
+  function colorizeTextNode(textNode) {
+    if (shouldSkipTextNode(textNode) || !/\S/.test(textNode.nodeValue || "")) return;
+
+    var fragment = document.createDocumentFragment();
+    var pieces = (textNode.nodeValue || "").split(/(\s+)/);
+
+    pieces.forEach(function (piece) {
+      if (!piece) return;
+
+      if (/^\s+$/.test(piece)) {
+        fragment.appendChild(document.createTextNode(piece));
+        return;
+      }
+
+      var word = document.createElement("span");
+      var paletteIndex = (rainbowCounter * COLORIZER.STEP) % COLORIZER.PALETTE.length;
+      word.className = "wk-rainbow-word";
+      word.dataset.wkRainbow = "true";
+      word.style.setProperty("--wk-word-color", COLORIZER.PALETTE[paletteIndex]);
+      word.textContent = piece;
+      fragment.appendChild(word);
+      rainbowCounter += 1;
+    });
+
+    textNode.replaceWith(fragment);
+  }
+
+  function colorizeTarget(target) {
+    var walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    var textNodes = [];
+    var current;
+
+    while ((current = walker.nextNode())) {
+      textNodes.push(current);
+    }
+
+    textNodes.forEach(colorizeTextNode);
+  }
+
+  function applyRainbowWords() {
+    unwrapRainbowWords();
+    rainbowCounter = 0;
+
+    root.querySelectorAll(COLORIZER.COLOR_TARGETS.join(",")).forEach(colorizeTarget);
+  }
+
+  COLORIZER.refresh = applyRainbowWords;
+  window.WOBBLE_SIGNAL_COLORIZER = COLORIZER;
 
   var card = root.querySelector(".wk-signal__card");
   var image = root.querySelector(".wk-signal__image");
@@ -732,6 +888,7 @@
         image.hidden = true;
         placeholder.hidden = false;
         placeholder.querySelector("span:last-child").textContent = "Visual signal unavailable";
+        applyRainbowWords();
       };
 
       image.alt = hasVideo(kind)
@@ -745,6 +902,8 @@
         ? "Moving transmission detected"
         : "Text transmission received";
     }
+
+    applyRainbowWords();
   }
 
   function renderError(data) {
@@ -766,6 +925,7 @@
     button.href = fallbackUrl;
     buttonText.textContent = "Visit Facebook";
     button.hidden = false;
+    applyRainbowWords();
   }
 
   async function loadSignal() {
@@ -795,6 +955,7 @@
     }
   }
 
+  applyRainbowWords();
   loadSignal();
 })();
 </script>
