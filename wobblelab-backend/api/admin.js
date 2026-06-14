@@ -555,36 +555,104 @@ async function handleUpdateRequest(req, res, supabase) {
   return jsonOk(req, res, { request: data, emailed: emailResult.emailed, emailError: emailResult.emailError });
 }
 
+// --- product helpers ---------------------------------------------------------
+const PRODUCT_ADOPTION_STATUS = [
+  "available", "sold_out", "pre_order", "incubating", "archived", "coming_soon",
+];
+
+function slugifyProduct(s) {
+  return String(s || "")
+    .toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+// Build a validated, whitelist-only product field object from a request body.
+// Returns { fields } on success or { error } on the first validation failure.
+// Never lets the client write arbitrary columns.
+function buildProductFields(body) {
+  const f = {};
+  const text = (k) => { if (body[k] !== undefined) f[k] = body[k] === null ? null : String(body[k]); };
+  ["name", "slug", "description", "short_description", "category", "rarity",
+   "image_url", "wave_name", "personality", "species", "currency"].forEach(text);
+
+  const bool = (k) => {
+    if (body[k] === undefined) return null;
+    const b = toBoolOrNull(body[k]);
+    if (b === null) return `${k} must be boolean.`;
+    f[k] = b; return null;
+  };
+  for (const k of ["is_active", "is_featured", "allow_multiple"]) {
+    const err = bool(k); if (err) return { error: err };
+  }
+
+  const nonNegInt = (k) => {
+    if (body[k] === undefined) return null;
+    const n = toIntOrNull(body[k]);
+    if (n === null || n < 0) return `${k} must be a number >= 0.`;
+    f[k] = n; return null;
+  };
+  for (const k of ["price_cents", "stock_quantity", "display_order"]) {
+    const err = nonNegInt(k); if (err) return { error: err };
+  }
+
+  if (body.adoption_status !== undefined) {
+    const v = String(body.adoption_status);
+    if (!PRODUCT_ADOPTION_STATUS.includes(v)) return { error: "Invalid adoption_status." };
+    f.adoption_status = v;
+  }
+  if (body.gallery_urls !== undefined) {
+    let g = body.gallery_urls;
+    if (typeof g === "string") { try { g = JSON.parse(g); } catch { return { error: "gallery_urls must be a JSON array." }; } }
+    if (!Array.isArray(g)) return { error: "gallery_urls must be an array." };
+    f.gallery_urls = g.map((x) => String(x)).filter(Boolean);
+  }
+  if (body.metadata !== undefined) {
+    let m = body.metadata;
+    if (typeof m === "string") { try { m = JSON.parse(m); } catch { return { error: "metadata must be a JSON object." }; } }
+    if (m === null || typeof m !== "object" || Array.isArray(m)) return { error: "metadata must be a JSON object." };
+    f.metadata = m;
+  }
+  if (body.admin_notes !== undefined) f.admin_notes = body.admin_notes === null ? null : String(body.admin_notes);
+
+  return { fields: f };
+}
+
+// Is this slug already used by a DIFFERENT product? (excludeId optional)
+async function slugTaken(supabase, slug, excludeId) {
+  let q = supabase.from(TABLES.products).select("id").eq("slug", slug).limit(1);
+  if (excludeId) q = q.neq("id", excludeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).length > 0;
+}
+
 // --- update-product ----------------------------------------------------------
 async function handleUpdateProduct(req, res, supabase) {
   const body = readBody(req);
-  const { product_id, is_active, is_featured, stock_quantity, price_cents, admin_notes } = body;
+  const { product_id } = body;
   if (!product_id) return jsonError(req, res, 400, "product_id is required.");
 
-  const update = {};
-  if (is_active !== undefined) {
-    const b = toBoolOrNull(is_active);
-    if (b === null) return jsonError(req, res, 400, "is_active must be boolean.");
-    update.is_active = b;
+  const built = buildProductFields(body);
+  if (built.error) return jsonError(req, res, 400, built.error);
+  const update = built.fields;
+
+  // If the slug is being changed, normalize + enforce uniqueness.
+  if (update.slug !== undefined) {
+    const slug = slugifyProduct(update.slug);
+    if (!slug) return jsonError(req, res, 400, "slug cannot be empty.");
+    try {
+      if (await slugTaken(supabase, slug, product_id)) {
+        return jsonError(req, res, 409, "That slug is already used by another product.");
+      }
+    } catch (e) {
+      console.error("[forge] slug check:", e.message);
+      return jsonError(req, res, 500, "Could not validate slug.");
+    }
+    update.slug = slug;
   }
-  if (is_featured !== undefined) {
-    const b = toBoolOrNull(is_featured);
-    if (b === null) return jsonError(req, res, 400, "is_featured must be boolean.");
-    update.is_featured = b;
-  }
-  if (stock_quantity !== undefined) {
-    const n = toIntOrNull(stock_quantity);
-    if (n === null || n < 0) return jsonError(req, res, 400, "stock_quantity must be a number >= 0.");
-    update.stock_quantity = n;
-  }
-  if (price_cents !== undefined) {
-    const n = toIntOrNull(price_cents);
-    if (n === null || n < 0) return jsonError(req, res, 400, "price_cents must be a number >= 0.");
-    update.price_cents = n;
-  }
-  if (admin_notes !== undefined) {
-    update.admin_notes = admin_notes === null ? null : String(admin_notes);
-  }
+
   if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
   update.updated_at = new Date().toISOString();
 
@@ -595,6 +663,97 @@ async function handleUpdateProduct(req, res, supabase) {
     return jsonError(req, res, 500, "Failed to update product.");
   }
   return jsonOk(req, res, { product: data });
+}
+
+// --- create-product ----------------------------------------------------------
+async function handleCreateProduct(req, res, supabase) {
+  const body = readBody(req);
+  const built = buildProductFields(body);
+  if (built.error) return jsonError(req, res, 400, built.error);
+  const fields = built.fields;
+
+  const name = (fields.name || "").trim();
+  if (!name) return jsonError(req, res, 400, "name is required.");
+  fields.name = name;
+
+  // Resolve a unique slug: use the provided one (must be free) or derive from
+  // the name and auto-suffix until unique.
+  try {
+    if (fields.slug) {
+      const slug = slugifyProduct(fields.slug);
+      if (!slug) return jsonError(req, res, 400, "slug cannot be empty.");
+      if (await slugTaken(supabase, slug)) {
+        return jsonError(req, res, 409, "That slug is already in use.");
+      }
+      fields.slug = slug;
+    } else {
+      let base = slugifyProduct(name) || "wobblekin";
+      let slug = base, n = 2;
+      while (await slugTaken(supabase, slug)) { slug = `${base}-${n++}`; }
+      fields.slug = slug;
+    }
+  } catch (e) {
+    console.error("[forge] slug resolve:", e.message);
+    return jsonError(req, res, 500, "Could not validate slug.");
+  }
+
+  // Safe defaults: new products are INACTIVE until the admin activates them.
+  const now = new Date().toISOString();
+  const row = {
+    is_active: false,
+    is_featured: false,
+    currency: "usd",
+    price_cents: 0,
+    stock_quantity: 0,
+    display_order: 0,
+    adoption_status: "available",
+    ...fields,            // any provided values override the defaults above
+    updated_at: now,
+  };
+
+  const { data, error } = await supabase
+    .from(TABLES.products).insert(row).select().single();
+  if (error) {
+    console.error("[forge] create-product:", error.message);
+    return jsonError(req, res, 500, "Failed to create product.");
+  }
+  return jsonOk(req, res, { product: data });
+}
+
+// --- delete-product (safe: archive if referenced by orders) ------------------
+async function handleDeleteProduct(req, res, supabase) {
+  const body = readBody(req);
+  const { product_id } = body;
+  if (!product_id) return jsonError(req, res, 400, "product_id is required.");
+
+  // If any order item references this product, NEVER hard-delete — archive it
+  // so historical order snapshots stay intact.
+  const { data: refs, error: refErr } = await supabase
+    .from(TABLES.orderItems).select("id").eq("product_id", product_id).limit(1);
+  if (refErr) {
+    console.error("[forge] delete-product ref check:", refErr.message);
+    return jsonError(req, res, 500, "Could not check order references.");
+  }
+
+  if ((refs || []).length > 0) {
+    const { data, error } = await supabase
+      .from(TABLES.products)
+      .update({ is_active: false, adoption_status: "archived", updated_at: new Date().toISOString() })
+      .eq("id", product_id).select().single();
+    if (error) {
+      console.error("[forge] delete-product archive:", error.message);
+      return jsonError(req, res, 500, "Failed to archive product.");
+    }
+    return jsonOk(req, res, { product: data, archived: true, deleted: false,
+      message: "Product is referenced by past orders, so it was archived (deactivated) instead of deleted." });
+  }
+
+  const { error } = await supabase.from(TABLES.products).delete().eq("id", product_id);
+  if (error) {
+    console.error("[forge] delete-product:", error.message);
+    return jsonError(req, res, 500, "Failed to delete product.");
+  }
+  return jsonOk(req, res, { deleted: true, archived: false });
 }
 
 // --- concepts (Creative Pipeline staging queue) ------------------------------
@@ -690,6 +849,8 @@ const POST_ACTIONS = {
   "update-order": handleUpdateOrder,
   "update-request": handleUpdateRequest,
   "update-product": handleUpdateProduct,
+  "create-product": handleCreateProduct,
+  "delete-product": handleDeleteProduct,
   "update-concept": handleUpdateConcept,
   "claim-concept": handleClaimConcept,
 };
