@@ -5,19 +5,15 @@
 // Supabase (never trusts browser prices), creates a PENDING order + order items,
 // then creates a Stripe Checkout Session and returns its URL.
 //
-// CORS / preflight notes:
-//   • setCorsHeaders() runs FIRST on every request, so OPTIONS and every error
-//     response carry the CORS headers (the browser hides the real error if they
-//     are missing).
-//   • Stripe/Supabase clients are created INSIDE the handler, AFTER the OPTIONS
-//     short-circuit. If they were created at module load and an env var was
-//     missing, the function would crash on load and the preflight would return a
-//     header-less 500 — which the browser reports as a CORS error. Lazy init
-//     keeps the preflight bulletproof regardless of env config.
+// FULFILLMENT METHODS (added):
+//   • "shipping"     -> collects a shipping address + flat shipping rate (unchanged).
+//   • "local_pickup" -> NO shipping address, NO shipping options, $0 shipping,
+//                       phone collection on, a pickup note in Checkout, and the
+//                       method stamped into session + payment_intent metadata.
+// The method is validated server-side. The browser NEVER sends a shipping price.
 //
-// Module style: ESM (import / export default). This MUST match your other API
-// routes. If submit-request.js / join-wobblelist.js use require()/module.exports
-// (CommonJS), use the CommonJS version of this file instead.
+// CORS / preflight + lazy client init notes are unchanged (see below).
+// Module style: ESM (import / export default).
 // =============================================================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -37,15 +33,13 @@ function setCorsHeaders(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-// Where Stripe sends the customer back to. Uses WOBBLEKINS_SITE_URL if set,
-// then SITE_URL, then a hard default. (Check Vercel > Settings > Env Vars.)
+// Where Stripe sends the customer back to.
 const SITE_URL = process.env.WOBBLEKINS_SITE_URL || process.env.SITE_URL || 'https://wobblekins.com';
 
-// Countries you ship physical Wobblekins to. Add more as needed: ['US','CA','GB']
+// Countries you ship physical Wobblekins to.
 const SHIPPING_COUNTRIES = ['US'];
 
-// Flat-rate shipping shown at checkout. Edit the price/name/estimate here.
-// (amount is in CENTS: 699 = $6.99)
+// Flat-rate shipping shown at checkout (amount in CENTS: 699 = $6.99).
 const SHIPPING_RATE = {
   display_name: 'Standard Shipping',
   amount_cents: 699,
@@ -53,11 +47,12 @@ const SHIPPING_RATE = {
   delivery_max_days: 7
 };
 
+// The two valid fulfillment methods. Anything else is rejected.
+const VALID_FULFILLMENT = ['shipping', 'local_pickup'];
+
 export default async function handler(req, res) {
-  // CORS headers on EVERY response (set before anything can fail).
   setCorsHeaders(req, res);
 
-  // Preflight: answer immediately, before any Stripe/Supabase logic.
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -66,11 +61,20 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Lazy init so a missing/misnamed env var can't break the CORS preflight above.
     const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+
+    // ---- validate fulfillment method (server-side, never trusted blindly) ---
+    // Missing -> default to 'shipping' so older callers keep working. If present,
+    // it MUST be exactly one of the valid values.
+    const fulfillment_method = body.fulfillment_method == null ? 'shipping' : String(body.fulfillment_method);
+    if (!VALID_FULFILLMENT.includes(fulfillment_method)) {
+      return res.status(400).json({ ok: false, error: 'Invalid fulfillment method.' });
+    }
+    const isPickup = fulfillment_method === 'local_pickup';
+
     const rawItems = Array.isArray(body.items) ? body.items : [];
     if (rawItems.length === 0) {
       return res.status(400).json({ ok: false, error: 'Your Adoption Bag is empty.' });
@@ -106,8 +110,7 @@ export default async function handler(req, res) {
       const qty = wanted.get(product.slug);
       if (!qty) continue;
 
-      // OPTIONAL stock check — OFF by default. To enforce on a product, set
-      // metadata.track_inventory = true and keep stock_quantity accurate.
+      // OPTIONAL stock check — off unless a product sets metadata.track_inventory = true.
       if (product.metadata && product.metadata.track_inventory === true) {
         if (product.stock_quantity < qty) {
           return res.status(409).json({ ok: false, error: `${product.name} is sold out or low on stock.` });
@@ -145,14 +148,17 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: 'No valid items to check out.' });
     }
 
-    // 1) Create a PENDING order first (gives us an order id for Stripe metadata).
+    // 1) Create a PENDING order. Stamp the fulfillment method now so it is known
+    //    even before the webhook, and zero shipping for pickup orders.
     const { data: order, error: orderErr } = await supabase
       .from('wobblekin_orders')
       .insert({
         subtotal_cents: subtotal,
-        total_cents: subtotal,            // shipping/tax (if any) filled in by webhook
+        total_cents: subtotal,            // shipping/tax (if any) reconciled by the webhook
+        shipping_cents: 0,
         currency: 'usd',
         status: 'pending',
+        fulfillment_method,
         metadata: { line_items: orderItems }
       })
       .select()
@@ -165,15 +171,31 @@ export default async function handler(req, res) {
       .insert(orderItems.map(oi => ({ ...oi, order_id: order.id })));
     if (itemsErr) throw itemsErr;
 
-    // 3) Create the Stripe Checkout Session.
-    const session = await stripe.checkout.sessions.create({
+    // 3) Build the Stripe Checkout Session. Shared params first, then branch.
+    const sessionParams = {
       mode: 'payment',
       line_items,
       client_reference_id: order.id,
-      shipping_address_collection: { allowed_countries: SHIPPING_COUNTRIES },
-      // Flat-rate shipping. Stripe adds this to the total and reports it back on
-      // the completed session as total_details.amount_shipping (saved by the webhook).
-      shipping_options: [
+      phone_number_collection: { enabled: true },
+      // Method travels with the session AND the payment intent so the webhook
+      // reads an explicit value (never inferred from address presence).
+      metadata: { order_id: order.id, fulfillment_method },
+      payment_intent_data: { metadata: { order_id: order.id, fulfillment_method } },
+      success_url: `${SITE_URL}/adoption-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${SITE_URL}/adopt`
+    };
+
+    if (isPickup) {
+      // Local pickup: no address, no shipping options, $0 shipping. A note tells
+      // the buyer what happens next. (Billing details are still collected by
+      // Stripe as needed for the payment.)
+      sessionParams.custom_text = {
+        submit: { message: 'This order is for local pickup. We will email you when it is ready.' }
+      };
+    } else {
+      // Shipping: unchanged behavior — collect address + flat shipping rate.
+      sessionParams.shipping_address_collection = { allowed_countries: SHIPPING_COUNTRIES };
+      sessionParams.shipping_options = [
         {
           shipping_rate_data: {
             type: 'fixed_amount',
@@ -185,13 +207,10 @@ export default async function handler(req, res) {
             }
           }
         }
-      ],
-      phone_number_collection: { enabled: true },
-      metadata: { order_id: order.id },
-      payment_intent_data: { metadata: { order_id: order.id } },
-      success_url: `${SITE_URL}/adoption-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${SITE_URL}/adopt`
-    });
+      ];
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     // 4) Save the Stripe session id on the order.
     await supabase.from('wobblekin_orders')
@@ -200,7 +219,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, url: session.url, id: session.id });
   } catch (err) {
-    // CORS headers were already set at the top, so the browser will see THIS error.
     console.error('[create-checkout-session] error:', err);
     return res.status(500).json({ ok: false, error: 'Could not start checkout. Please try again.' });
   }
