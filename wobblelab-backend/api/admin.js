@@ -171,6 +171,15 @@ function readBody(req) {
 const FROM_EMAIL = "The Wobble Lab <requests@wobblekins.com>";
 const REPLY_TO_EMAIL = "genesisforge@wobblekins.com";
 
+// Local-pickup workflow statuses + pickup details. The location/hours/
+// instructions are taken from env vars (set in Vercel) so the private address
+// is never hard-coded in client code; it is only ever sent to the paying
+// customer in the "ready for pickup" email.
+const ALLOWED_PICKUP_STATUS = ["preparing", "ready_for_pickup", "picked_up", "cancelled"];
+const PICKUP_LOCATION = process.env.PICKUP_LOCATION || "";
+const PICKUP_HOURS = process.env.PICKUP_HOURS || "";
+const PICKUP_INSTRUCTIONS = process.env.PICKUP_INSTRUCTIONS || "";
+
 const ORDER_STATUS_EMAILS = {
   // new: null,  // initial state — covered by the order confirmation email
   reviewing: { accent: "#3b9dff", subject: "We're reviewing your Wobblekins order",
@@ -291,6 +300,55 @@ async function maybeSendStatusEmail({ map, status, to, customerName, refLabel, r
     return { emailed: true, emailError: null };
   } catch (e) {
     console.error("[forge] status email failed:", e.message);
+    return { emailed: false, emailError: e.message };
+  }
+}
+
+// Local-pickup customer emails. Best-effort; never throws. Sent when an admin
+// moves a pickup order to ready_for_pickup or picked_up. The "ready" email is
+// the only place the private pickup location/hours are revealed.
+async function maybeSendPickupEmail({ status, to, customerName, refValue, location }) {
+  if (status !== "ready_for_pickup" && status !== "picked_up") {
+    return { emailed: false, emailError: null };
+  }
+  if (!to) return { emailed: false, emailError: "No customer email on record." };
+
+  const loc = location || PICKUP_LOCATION;
+  let tpl, extraHtml = "";
+  if (status === "ready_for_pickup") {
+    const rows = [
+      loc ? `Location: <strong style="color:#f4f4f8;">${escapeHtmlEmail(loc)}</strong>` : "",
+      PICKUP_HOURS ? `Pickup hours: <strong style="color:#f4f4f8;">${escapeHtmlEmail(PICKUP_HOURS)}</strong>` : "",
+      PICKUP_INSTRUCTIONS ? escapeHtmlEmail(PICKUP_INSTRUCTIONS) : "",
+      `<span style="color:#ffd23f;">Please come only during the hours listed above — we can't release Wobblekins outside those times.</span>`,
+    ].filter(Boolean).join("<br/>");
+    extraHtml = `<tr><td style="padding:12px 30px 0 30px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.7;color:#d8d8e0;">${rows}</td></tr>`;
+    tpl = {
+      accent: "#42d60c",
+      subject: "Your Wobblekins are ready for pickup",
+      heading: "Ready for pickup",
+      body: "Good news — your Wobblekins are ready to leave the Lab. Here's where and when to collect them.",
+    };
+  } else {
+    tpl = {
+      accent: "#3b9dff",
+      subject: "Your Wobblekin adoption is complete",
+      heading: "Picked up — adoption complete",
+      body: "Your Wobblekins have been picked up. Thank you for adopting from the Wobble Lab!",
+    };
+  }
+
+  try {
+    const html = renderStatusEmail({
+      accent: tpl.accent, heading: tpl.heading, body: tpl.body,
+      customerName, statusLabel: status.replace(/_/g, " "),
+      refLabel: "Order", refValue: String(refValue), extraHtml,
+    });
+    await sendCustomerEmail({ to, subject: tpl.subject, html });
+    console.log(`[forge] pickup email sent: Order ${refValue} -> ${status} (${to})`);
+    return { emailed: true, emailError: null };
+  } catch (e) {
+    console.error("[forge] pickup email failed:", e.message);
     return { emailed: false, emailError: e.message };
   }
 }
@@ -444,7 +502,7 @@ async function handleWobblelist(req, res, supabase) {
 // --- update-order ------------------------------------------------------------
 async function handleUpdateOrder(req, res, supabase) {
   const body = readBody(req);
-  const { order_id, fulfillment_status, admin_notes } = body;
+  const { order_id, fulfillment_status, admin_notes, pickup_status } = body;
   if (!order_id) return jsonError(req, res, 400, "order_id is required.");
 
   // Read the current row first so we can tell whether the status actually
@@ -465,6 +523,12 @@ async function handleUpdateOrder(req, res, supabase) {
   }
   if (admin_notes !== undefined) {
     update.admin_notes = admin_notes === null ? null : String(admin_notes);
+  }
+  if (pickup_status !== undefined) {
+    if (!ALLOWED_PICKUP_STATUS.includes(pickup_status)) {
+      return jsonError(req, res, 400, "Invalid pickup_status.");
+    }
+    update.pickup_status = pickup_status;
   }
   if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
   update.updated_at = new Date().toISOString();
@@ -499,6 +563,18 @@ async function handleUpdateOrder(req, res, supabase) {
       refLabel: "Order", refValue: String(order_id),
       statusLabel: update.fulfillment_status, extraHtml,
     });
+  }
+
+  // Local-pickup email — best effort, only on a real pickup_status change.
+  if (update.pickup_status && update.pickup_status !== existing.pickup_status) {
+    const r = await maybeSendPickupEmail({
+      status: update.pickup_status,
+      to: data.customer_email || existing.customer_email,
+      customerName: data.customer_name || existing.customer_name,
+      refValue: order_id,
+      location: data.pickup_location || existing.pickup_location,
+    });
+    if (r.emailed || r.emailError) emailResult = r;
   }
 
   return jsonOk(req, res, { order: data, emailed: emailResult.emailed, emailError: emailResult.emailError });
