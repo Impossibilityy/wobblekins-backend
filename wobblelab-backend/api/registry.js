@@ -231,7 +231,7 @@ async function resolveInstanceBySecret(supabase, { token, code }) {
 // =============================================================================
 async function handleGetMyForgeprints(req, res, supabase, user) {
   if (!user) return jsonError(req, res, 401, "Please sign in to view your Wobblekin Family.", { state: "auth_required" });
-  const { data, error } = await supabase.from(TABLES.instances).select(CUSTOMER_COLUMNS + ", order_id")
+  const { data, error } = await supabase.from(TABLES.instances).select(CUSTOMER_COLUMNS)
     .eq("owner_user_id", user.id)
     .order("claimed_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false });
