@@ -34,6 +34,7 @@ const TABLES = {
   products: "wobblekin_products",
   subscribers: "wobblelist_subscribers",
   conceptQueue: "wobblekin_concept_queue",
+  dexEntries: "wobblekin_dex_entries",
 };
 
 // Column on wobblekin_order_items that points back at an order's primary key.
@@ -913,6 +914,184 @@ async function handleClaimConcept(req, res, supabase) {
 // =============================================================================
 // ROUTER
 // =============================================================================
+// =============================================================================
+// WOBBLEDEX entries (admin-managed dex catalog)
+// =============================================================================
+const DEX_CATEGORIES = ["available", "vaulted", "prototype", "comingsoon"];
+const DEX_TEXT_FIELDS = [
+  "slug", "name", "type", "wave", "status", "category", "hint", "personality",
+  "format", "habitat", "wiggle", "care", "collector_note", "edition",
+  "image_url", "product_url",
+];
+
+function slugifyDex(s) {
+  return String(s || "").toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+}
+async function dexSlugTaken(supabase, slug, excludeId) {
+  let q = supabase.from(TABLES.dexEntries).select("id").eq("slug", slug).limit(1);
+  if (excludeId) q = q.neq("id", excludeId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).length > 0;
+}
+// Whitelist-only field builder (never lets the client write arbitrary columns).
+function buildDexFields(body) {
+  const f = {};
+  for (const k of DEX_TEXT_FIELDS) {
+    if (body[k] !== undefined) f[k] = body[k] === null ? null : String(body[k]);
+  }
+  if (f.category != null && f.category !== "" && !DEX_CATEGORIES.includes(f.category)) {
+    return { error: "category must be one of: " + DEX_CATEGORIES.join(", ") + "." };
+  }
+  for (const k of ["coming_soon", "is_published"]) {
+    if (body[k] !== undefined) {
+      const v = toBoolOrNull(body[k]);
+      if (v === null) return { error: `${k} must be boolean.` };
+      f[k] = v;
+    }
+  }
+  if (body.sort_order !== undefined) {
+    const n = toIntOrNull(body.sort_order);
+    if (n === null) return { error: "sort_order must be a number." };
+    f.sort_order = n;
+  }
+  if (body.friends !== undefined) {
+    let fr = body.friends;
+    if (typeof fr === "string") { try { fr = JSON.parse(fr); } catch { return { error: "friends must be a JSON array." }; } }
+    if (!Array.isArray(fr)) return { error: "friends must be an array." };
+    f.friends = fr.map((x) => String(x).trim()).filter(Boolean);
+  }
+  return { fields: f };
+}
+
+async function handleListDex(req, res, supabase) {
+  const { data, error } = await supabase.from(TABLES.dexEntries).select("*")
+    .order("sort_order", { ascending: true }).order("created_at", { ascending: true });
+  if (error) { console.error("[forge] list-wobbledex:", error.message); return jsonError(req, res, 500, "Failed to load Wobbledex entries."); }
+  return jsonOk(req, res, { entries: data || [] });
+}
+
+async function handleCreateDex(req, res, supabase) {
+  const body = readBody(req);
+  const built = buildDexFields(body);
+  if (built.error) return jsonError(req, res, 400, built.error);
+  const f = built.fields;
+  const name = (f.name || "").trim();
+  if (!name) return jsonError(req, res, 400, "name is required.");
+  f.name = name;
+
+  try {
+    let slug = slugifyDex(f.slug || name);
+    if (!slug) return jsonError(req, res, 400, "slug is required.");
+    if (f.slug) {
+      if (await dexSlugTaken(supabase, slug)) return jsonError(req, res, 409, "That slug is already in use.");
+    } else {
+      let base = slug, n = 2;
+      while (await dexSlugTaken(supabase, slug)) { slug = `${base}-${n++}`; }
+    }
+    f.slug = slug;
+  } catch (e) { console.error("[forge] dex slug:", e.message); return jsonError(req, res, 500, "Could not validate slug."); }
+
+  if (f.sort_order === undefined) {
+    const { data: mx } = await supabase.from(TABLES.dexEntries)
+      .select("sort_order").order("sort_order", { ascending: false }).limit(1);
+    f.sort_order = (mx && mx[0] ? (mx[0].sort_order || 0) : 0) + 1;
+  }
+
+  const row = { is_published: false, coming_soon: false, friends: [], ...f, updated_at: new Date().toISOString() };
+  const { data, error } = await supabase.from(TABLES.dexEntries).insert(row).select().single();
+  if (error) { console.error("[forge] create-wobbledex:", error.message); return jsonError(req, res, 500, "Failed to create entry."); }
+  return jsonOk(req, res, { entry: data });
+}
+
+async function handleUpdateDex(req, res, supabase) {
+  const body = readBody(req);
+  const { entry_id } = body;
+  if (!entry_id) return jsonError(req, res, 400, "entry_id is required.");
+  const built = buildDexFields(body);
+  if (built.error) return jsonError(req, res, 400, built.error);
+  const update = built.fields;
+
+  if (update.slug !== undefined) {
+    const slug = slugifyDex(update.slug);
+    if (!slug) return jsonError(req, res, 400, "slug cannot be empty.");
+    try { if (await dexSlugTaken(supabase, slug, entry_id)) return jsonError(req, res, 409, "That slug is already used by another entry."); }
+    catch (e) { console.error("[forge] dex slug:", e.message); return jsonError(req, res, 500, "Could not validate slug."); }
+    update.slug = slug;
+  }
+  if (Object.keys(update).length === 0) return jsonError(req, res, 400, "Nothing to update.");
+  update.updated_at = new Date().toISOString();
+
+  const { data, error } = await supabase.from(TABLES.dexEntries).update(update).eq("id", entry_id).select().single();
+  if (error) { console.error("[forge] update-wobbledex:", error.message); return jsonError(req, res, 500, "Failed to update entry."); }
+  return jsonOk(req, res, { entry: data });
+}
+
+async function handleDuplicateDex(req, res, supabase) {
+  const body = readBody(req);
+  const { entry_id } = body;
+  if (!entry_id) return jsonError(req, res, 400, "entry_id is required.");
+  const { data: orig, error: e1 } = await supabase.from(TABLES.dexEntries).select("*").eq("id", entry_id).maybeSingle();
+  if (e1) { console.error("[forge] duplicate load:", e1.message); return jsonError(req, res, 500, "Could not load the original entry."); }
+  if (!orig) return jsonError(req, res, 404, "Entry not found.");
+
+  let slug = `${orig.slug}-copy`, n = 2;
+  try { while (await dexSlugTaken(supabase, slug)) { slug = `${orig.slug}-copy-${n++}`; } }
+  catch (e) { console.error("[forge] dex slug:", e.message); return jsonError(req, res, 500, "Could not validate slug."); }
+
+  const row = {
+    slug, name: `Copy of ${orig.name}`,
+    type: orig.type, wave: orig.wave, status: orig.status, category: orig.category,
+    hint: orig.hint, personality: orig.personality, format: orig.format, habitat: orig.habitat,
+    wiggle: orig.wiggle, care: orig.care, collector_note: orig.collector_note,
+    friends: Array.isArray(orig.friends) ? orig.friends : [], edition: orig.edition,
+    image_url: orig.image_url, product_url: orig.product_url, coming_soon: orig.coming_soon,
+    is_published: false, sort_order: (orig.sort_order || 0) + 1,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase.from(TABLES.dexEntries).insert(row).select().single();
+  if (error) { console.error("[forge] duplicate-wobbledex:", error.message); return jsonError(req, res, 500, "Failed to duplicate entry."); }
+  return jsonOk(req, res, { entry: data });
+}
+
+async function handleDeleteDex(req, res, supabase) {
+  const body = readBody(req);
+  const { entry_id } = body;
+  if (!entry_id) return jsonError(req, res, 400, "entry_id is required.");
+  const { error } = await supabase.from(TABLES.dexEntries).delete().eq("id", entry_id);
+  if (error) { console.error("[forge] delete-wobbledex:", error.message); return jsonError(req, res, 500, "Failed to delete entry."); }
+  return jsonOk(req, res, { deleted: true });
+}
+
+async function setDexPublished(req, res, supabase, published) {
+  const body = readBody(req);
+  const { entry_id } = body;
+  if (!entry_id) return jsonError(req, res, 400, "entry_id is required.");
+  const { data, error } = await supabase.from(TABLES.dexEntries)
+    .update({ is_published: published, updated_at: new Date().toISOString() })
+    .eq("id", entry_id).select().single();
+  if (error) { console.error("[forge] publish-wobbledex:", error.message); return jsonError(req, res, 500, "Failed to update publish state."); }
+  return jsonOk(req, res, { entry: data });
+}
+const handlePublishDex = (req, res, s) => setDexPublished(req, res, s, true);
+const handleUnpublishDex = (req, res, s) => setDexPublished(req, res, s, false);
+
+async function handleReorderDex(req, res, supabase) {
+  const body = readBody(req);
+  const order = Array.isArray(body.order) ? body.order : null;
+  if (!order || order.length === 0) return jsonError(req, res, 400, "order must be a non-empty array of entry ids.");
+  const now = new Date().toISOString();
+  try {
+    for (let i = 0; i < order.length; i++) {
+      const { error } = await supabase.from(TABLES.dexEntries)
+        .update({ sort_order: i, updated_at: now }).eq("id", order[i]);
+      if (error) throw error;
+    }
+  } catch (e) { console.error("[forge] reorder-wobbledex:", e.message); return jsonError(req, res, 500, "Failed to reorder entries."); }
+  return jsonOk(req, res, { reordered: order.length });
+}
+
 const GET_ACTIONS = {
   summary: handleSummary,
   orders: handleOrders,
@@ -920,6 +1099,7 @@ const GET_ACTIONS = {
   products: handleProducts,
   wobblelist: handleWobblelist,
   concepts: handleConcepts,
+  "list-wobbledex-entries": handleListDex,
 };
 const POST_ACTIONS = {
   "update-order": handleUpdateOrder,
@@ -929,6 +1109,13 @@ const POST_ACTIONS = {
   "delete-product": handleDeleteProduct,
   "update-concept": handleUpdateConcept,
   "claim-concept": handleClaimConcept,
+  "create-wobbledex-entry": handleCreateDex,
+  "update-wobbledex-entry": handleUpdateDex,
+  "duplicate-wobbledex-entry": handleDuplicateDex,
+  "delete-wobbledex-entry": handleDeleteDex,
+  "publish-wobbledex-entry": handlePublishDex,
+  "unpublish-wobbledex-entry": handleUnpublishDex,
+  "reorder-wobbledex-entries": handleReorderDex,
 };
 
 export default async function handler(req, res) {
