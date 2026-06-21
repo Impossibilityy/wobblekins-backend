@@ -33,7 +33,8 @@ function setCors(req, res) {
 const COLUMNS =
   'slug, name, type, wave, status, category, hint, personality, format, ' +
   'habitat, wiggle, care, collector_note, friends, edition, image_url, ' +
-  'product_url, coming_soon, sort_order, created_at';
+  'product_url, coming_soon, sort_order, created_at, ' +
+  'rarity, stats, traits, lore, visual_description';
 
 // DB row -> current Wobbledex front-end entry shape.
 function normalize(r) {
@@ -56,6 +57,12 @@ function normalize(r) {
     image: r.image_url || '',
     url: r.product_url || '#',
     comingSoon: !!r.coming_soon,
+    // migrated species stats (forward-compatible; current renderer ignores unknowns)
+    rarity: r.rarity || '',
+    stats: r.stats || {},
+    traits: r.traits || {},
+    lore: r.lore || '',
+    visualDescription: r.visual_description || '',
   };
 }
 
