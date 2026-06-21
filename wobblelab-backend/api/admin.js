@@ -652,7 +652,18 @@ function buildProductFields(body) {
   const f = {};
   const text = (k) => { if (body[k] !== undefined) f[k] = body[k] === null ? null : String(body[k]); };
   ["name", "slug", "description", "short_description", "category", "rarity",
-   "image_url", "wave_name", "personality", "species", "currency"].forEach(text);
+   "image_url", "wave_name", "personality", "species", "currency",
+   "product_type", "wave_scope"].forEach(text);
+
+  if (f.product_type !== undefined && f.product_type !== null) {
+    const PT = ["mystery_egg", "mystery_trove", "custom_request", "legacy_individual"];
+    if (!PT.includes(f.product_type)) return { error: "product_type must be one of: " + PT.join(", ") + "." };
+  }
+  if (body.mystery_quantity !== undefined) {
+    const n = toIntOrNull(body.mystery_quantity);
+    if (n === null || n < 1) return { error: "mystery_quantity must be a whole number >= 1." };
+    f.mystery_quantity = n;
+  }
 
   const bool = (k) => {
     if (body[k] === undefined) return null;
