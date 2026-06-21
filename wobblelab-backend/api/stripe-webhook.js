@@ -291,6 +291,12 @@ function customerEmailHtml(order, items) {
               You'll receive updates as your adoption moves through the forge. If a shipping address was collected, your Wobblekin will be sent there.
             </p>
           </td></tr>
+          <tr><td style="padding:6px 28px 0;">
+            <div style="background:#0d0d12;border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:14px 16px;color:#cfcfd8;font-size:13px;line-height:1.6;">
+              <strong style="color:#f4f4f8;">Track your Wobblekin Family</strong><br/>
+              Create or sign into your Wobblekin Family account with this email to keep the Wobblekins you bring home together in one place. Your mystery hatches appear there once the Wobble Lab assigns them.
+            </div>
+          </td></tr>
           <tr><td style="padding:18px 28px 30px;">
             <div style="border-top:1px solid rgba(255,255,255,.10);padding-top:16px;color:#6f6f7c;font-size:12px;line-height:1.6;">
               Order ref: ${escapeHtml(order.id)}<br/>
@@ -336,6 +342,12 @@ function pickupConfirmedEmailHtml(order, items) {
             <div style="background:#0d0d12;border:1px dashed rgba(255,255,255,.16);border-radius:12px;padding:14px 16px;color:#cfcfd8;font-size:14px;line-height:1.6;">
               <strong style="color:#f4f4f8;">What happens next</strong><br/>
               Please <strong>wait for our "Ready for Pickup" email</strong> before coming by — we'll send it the moment your Wobblekins are ready to leave the Lab, along with the pickup location and hours.
+            </div>
+          </td></tr>
+          <tr><td style="padding:10px 28px 0;">
+            <div style="background:#0d0d12;border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:14px 16px;color:#cfcfd8;font-size:13px;line-height:1.6;">
+              <strong style="color:#f4f4f8;">Track your Wobblekin Family</strong><br/>
+              Create or sign into your Wobblekin Family account with this email to keep the Wobblekins you bring home together in one place. Your mystery hatches appear there once the Wobble Lab assigns them.
             </div>
           </td></tr>
           <tr><td style="padding:18px 28px 30px;">
