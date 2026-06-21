@@ -28,7 +28,8 @@ const PUBLIC_COLUMNS =
   'id, slug, name, short_description, description, price_cents, currency, ' +
   'image_url, gallery_urls, category, rarity, stock_quantity, is_active, ' +
   'is_featured, allow_multiple, wave_name, personality, species, ' +
-  'adoption_status, display_order, metadata';
+  'adoption_status, display_order, metadata, ' +
+  'product_type, mystery_quantity, wave_scope';
 
 // CORS: only your storefront domains.
 const ALLOWED_ORIGINS = ['https://wobblekins.com', 'https://www.wobblekins.com'];
@@ -54,7 +55,7 @@ export default async function handler(req, res) {
 
     // ---- single product (for a detail view) --------------------------------
     if (slug || id) {
-      let q = supabase.from('wobblekin_products').select(PUBLIC_COLUMNS).eq('is_active', true);
+      let q = supabase.from('wobblekin_products').select(PUBLIC_COLUMNS).eq('is_active', true).neq('product_type', 'legacy_individual');
       q = slug ? q.eq('slug', slug) : q.eq('id', id);
       const { data, error } = await q.maybeSingle();
       if (error) throw error;
@@ -68,6 +69,7 @@ export default async function handler(req, res) {
       .from('wobblekin_products')
       .select(PUBLIC_COLUMNS)
       .eq('is_active', true)
+      .neq('product_type', 'legacy_individual')
       .order('display_order', { ascending: true, nullsFirst: false }) // explicit catalog order
       .order('is_featured', { ascending: false })                     // featured first
       .order('created_at', { ascending: false });                     // then newest
