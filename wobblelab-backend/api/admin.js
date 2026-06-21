@@ -921,7 +921,7 @@ const DEX_CATEGORIES = ["available", "vaulted", "prototype", "comingsoon"];
 const DEX_TEXT_FIELDS = [
   "slug", "name", "type", "wave", "status", "category", "hint", "personality",
   "format", "habitat", "wiggle", "care", "collector_note", "edition",
-  "image_url", "product_url",
+  "image_url", "product_url", "rarity", "lore", "visual_description",
 ];
 
 function slugifyDex(s) {
@@ -961,6 +961,14 @@ function buildDexFields(body) {
     if (typeof fr === "string") { try { fr = JSON.parse(fr); } catch { return { error: "friends must be a JSON array." }; } }
     if (!Array.isArray(fr)) return { error: "friends must be an array." };
     f.friends = fr.map((x) => String(x).trim()).filter(Boolean);
+  }
+  for (const k of ["stats", "traits"]) {
+    if (body[k] !== undefined) {
+      let m = body[k];
+      if (typeof m === "string") { try { m = JSON.parse(m); } catch { return { error: `${k} must be a JSON object.` }; } }
+      if (m === null || typeof m !== "object" || Array.isArray(m)) return { error: `${k} must be a JSON object.` };
+      f[k] = m;
+    }
   }
   return { fields: f };
 }
