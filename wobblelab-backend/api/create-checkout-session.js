@@ -104,6 +104,7 @@ export default async function handler(req, res) {
 
     const line_items = [];
     const orderItems = [];
+    const mysteryLines = [];
     let subtotal = 0;
 
     for (const product of products) {
@@ -142,11 +143,24 @@ export default async function handler(req, res) {
         unit_price_cents: product.price_cents,
         total_cents: lineTotal
       });
+      mysteryLines.push({
+        product_slug: product.slug,
+        product_name: product.name,
+        quantity: qty,
+        product_type: product.product_type || 'legacy_individual',
+        mystery_quantity: product.mystery_quantity || 1,
+        egg_count: (product.mystery_quantity || 1) * qty
+      });
     }
 
     if (line_items.length === 0) {
       return res.status(400).json({ ok: false, error: 'No valid items to check out.' });
     }
+
+    // Wobblekins to assign for mystery fulfillment (eggs x quantity).
+    const totalEggs = mysteryLines
+      .filter(l => l.product_type === 'mystery_egg' || l.product_type === 'mystery_trove')
+      .reduce((a, l) => a + l.egg_count, 0);
 
     // 1) Create a PENDING order. Stamp the fulfillment method now so it is known
     //    even before the webhook, and zero shipping for pickup orders.
@@ -159,7 +173,7 @@ export default async function handler(req, res) {
         currency: 'usd',
         status: 'pending',
         fulfillment_method,
-        metadata: { line_items: orderItems }
+        metadata: { line_items: orderItems, mystery: { total_eggs: totalEggs, lines: mysteryLines } }
       })
       .select()
       .single();
